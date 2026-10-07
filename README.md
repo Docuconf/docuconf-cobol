@@ -13,7 +13,7 @@ You need Go 1.25 or later and GnuCOBOL 3 (`apt-get install gnucobol3`). Nothing 
 go install github.com/docuconf/docuconf-cobol/cmd/docuconf-cobol@latest
 # docuconf exec is not in a docuconf-go release yet. This is the commit
 # this SDK is tested against (go.mod pins the same one):
-go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261007140246-bf1804919533
+go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261007154406-1029819050f4
 ```
 
 Once docuconf-go tags a release that includes `docuconf exec`, use that version instead of the commit. The loader uses only standard COBOL plus `ACCEPT ... FROM ENVIRONMENT`, `FUNCTION TRIM` and `NUMVAL-F`.

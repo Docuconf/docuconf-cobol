@@ -6,7 +6,7 @@
 # values and contract defaults to the program; when a release exists,
 # copy its binary instead and drop this stage.
 FROM golang:1.25 AS docuconf
-ARG DOCUCONF_VERSION=v0.0.0-20261007140246-bf1804919533
+ARG DOCUCONF_VERSION=v0.0.0-20261007154406-1029819050f4
 RUN CGO_ENABLED=0 go install github.com/docuconf/docuconf-go/cmd/docuconf@${DOCUCONF_VERSION}
 
 # The COBOL program and its generated loader, compiled with GnuCOBOL.
