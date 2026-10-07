@@ -497,8 +497,8 @@ func (b *builder) item(e *copybook.Entry, group string) {
 // known lists the tags a variable may carry, by normalised name.
 var knownVarTags = []string{"env", "desc", "type", "secret", "required", "default", "min", "max",
 	"minlength", "maxlength", "pattern", "schemes", "values", "minitems", "maxitems", "itemmin",
-	"itemmax", "encoding", "separator", "unit", "count", "present", "examples", "deprecated",
-	"group", "schema", "configkey"}
+	"itemmax", "itemminlength", "itemmaxlength", "encoding", "separator", "unit", "count", "present",
+	"examples", "deprecated", "group", "schema", "configkey"}
 
 func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	p := b.p
@@ -650,22 +650,32 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 		}
 	}
 
+	// fieldLength is the maxLength of a value that goes into the PIC X
+	// field: the field's size, or less with @max-length. The size is in
+	// bytes and maxLength counts characters, so a value with multi-byte
+	// characters can still be too long for the field; the loader checks.
+	fieldLength := func() int64 {
+		n := pic.Size
+		if s, ok := single("maxlength"); ok {
+			m, err := strconv.Atoi(s)
+			switch {
+			case err != nil || m < 0:
+				fail("@max-length must be a non-negative integer")
+			case m > pic.Size:
+				fail("@max-length %d is more than PIC %s holds", m, e.Pic)
+			default:
+				n = m
+			}
+		}
+		return int64(n)
+	}
+
 	switch scalar {
 	case tString:
-		allow("minlength", "maxlength", "pattern")
+		// A list of strings takes @item-min-length and @item-max-length.
 		if e.Occurs == 0 {
-			o["maxLength"] = int64(pic.Size)
-			if s, ok := single("maxlength"); ok {
-				n, err := strconv.Atoi(s)
-				switch {
-				case err != nil || n < 0:
-					fail("@max-length must be a non-negative integer")
-				case n > pic.Size:
-					fail("@max-length %d is more than PIC %s holds", n, e.Pic)
-				default:
-					o["maxLength"] = int64(n)
-				}
-			}
+			allow("minlength", "maxlength", "pattern")
+			o["maxLength"] = fieldLength()
 			if s, ok := single("minlength"); ok {
 				n, err := strconv.Atoi(s)
 				if err != nil || n < 0 {
@@ -678,10 +688,11 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 			}
 		}
 	case tURL:
-		allow("schemes")
+		allow("schemes", "maxlength")
 		if t, ok := d.get("schemes"); ok {
 			o["schemes"] = toAny(t.values)
 		}
+		o["maxLength"] = fieldLength()
 	case tEnum:
 		allow("values")
 		if t, ok := d.get("values"); ok {
@@ -710,10 +721,13 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 		}
 		o["values"] = toAny(v.Values)
 	case tJSON:
-		allow("schema")
+		// maxLength bounds the raw JSON text as received, which is what
+		// goes into the field.
+		allow("schema", "maxlength")
 		if s, ok := single("schema"); ok {
 			o["schema"] = b.schema(e, s)
 		}
+		o["maxLength"] = fieldLength()
 	case tInt:
 		allow("min", "max")
 		if e.Occurs == 0 {
@@ -906,6 +920,35 @@ func (b *builder) list(e *copybook.Entry, d doc, v *Var, o map[string]any, singl
 		lo, hi := b.bounds(e, d, picLo, picHi, "itemmin", "itemmax")
 		o["itemMin"], o["itemMax"] = json.Number(lo.String()), json.Number(hi.String())
 		v.Min, v.Max = narrower(lo, picLo), narrower(hi, picHi)
+	}
+	if v.Items == tString {
+		// Each item goes into one PIC X(n) entry: itemMaxLength defaults to
+		// n, which counts bytes while itemMaxLength counts characters.
+		allow("itemminlength", "itemmaxlength")
+		hi := v.Pic.Size
+		if s, ok := single("itemmaxlength"); ok {
+			n, err := strconv.Atoi(s)
+			switch {
+			case err != nil || n < 0:
+				fail("@item-max-length must be a non-negative integer")
+			case n > v.Pic.Size:
+				fail("@item-max-length %d is more than PIC %s holds", n, e.Pic)
+			default:
+				hi = n
+			}
+		}
+		o["itemMaxLength"] = int64(hi)
+		if s, ok := single("itemminlength"); ok {
+			n, err := strconv.Atoi(s)
+			switch {
+			case err != nil || n < 0:
+				fail("@item-min-length must be a non-negative integer")
+			case n > hi:
+				fail("@item-min-length %d is above the item maximum length %d", n, hi)
+			default:
+				o["itemMinLength"] = int64(n)
+			}
+		}
 	}
 	// The number of items goes in the DEPENDING ON item, or in @count.
 	count, hasCount := single("count")

@@ -15,25 +15,23 @@ contract.#Contract & {
 		}
 	}
 	vars: {
-		// Each item must fit CFG-ALLOWED-ORIGINS (64 bytes). The contract cannot state an item length
-		// yet, so the COBOL loader rejects a longer item at boot (out_of_range).
 		ALLOWED_ORIGINS: {
 			type:        "list"
 			description: "Origins whose orders the job accepts"
 			default: ["http://localhost:3000"]
-			encoding:  "csv"
-			items:     "string"
-			separator: ","
-			minItems:  1
-			maxItems:  8
+			encoding:      "csv"
+			items:         "string"
+			separator:     ","
+			minItems:      1
+			maxItems:      8
+			itemMaxLength: 64
 		}
-		// The value must fit CFG-DATABASE-URL (200 bytes). The contract cannot state a url's length,
-		// so the COBOL loader rejects a longer value at boot (out_of_range).
 		DATABASE_URL: {
 			type:        "url"
 			description: "Postgres connection string of the orders database"
 			required:    true
 			secret:      true
+			maxLength:   200
 			schemes: ["postgres"]
 		}
 		LOG_LEVEL: {

@@ -32,6 +32,7 @@
            05  GW-RETRY-INTERVAL       PIC 9(4)V999.
       *> Upstream base URL
       *> @type url  @schemes https  @default "https://api.example.com"
+      *> @max-length 80
            05  GW-UPSTREAM             PIC X(100).
       *> Log verbosity
       *> @default info
@@ -48,6 +49,7 @@
            05  GW-SHARD-COUNT          PIC 99.
       *> Tags added to every record
       *> @separator ";"  @count GW-TAG-COUNT  @default a b
+      *> @item-min-length 1
            05  GW-TAGS                 PIC X(10) OCCURS 5.
            05  GW-TAG-COUNT            PIC 9.
       *> Rate limits per client

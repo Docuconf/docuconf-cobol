@@ -2,11 +2,12 @@
 # Build from this directory: docker build -t orders-batch .
 
 # The docuconf CLI, built from source: docuconf-go publishes no release
-# binary or image yet. Pinned to the commit whose exec passes -env-file
-# values and contract defaults to the program; when a release exists,
-# copy its binary instead and drop this stage.
+# binary or image yet. Pinned to the docuconf-go commit go.mod pins (exec
+# passing -env-file values and contract defaults to the program, and the
+# length limits); when a release exists, copy its binary instead and drop
+# this stage.
 FROM golang:1.25 AS docuconf
-ARG DOCUCONF_VERSION=v0.0.0-20261007154406-1029819050f4
+ARG DOCUCONF_VERSION=v0.0.0-20261007225926-e9554f671c32
 RUN CGO_ENABLED=0 go install github.com/docuconf/docuconf-go/cmd/docuconf@${DOCUCONF_VERSION}
 
 # The COBOL program and its generated loader, compiled with GnuCOBOL.
