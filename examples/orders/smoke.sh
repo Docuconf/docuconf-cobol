@@ -27,7 +27,7 @@ if ! out=$(env -i PATH="$PATH" \
 	ALLOWED_ORIGINS=https://shop.example.com,http://localhost:3000 \
 	ORDERS_FILE="$here/orders.txt" \
 	DOCUCONF_TERMINATION_LOG="$work/termination-log" \
-	"$docuconf" exec --contract contract.cue -- "$work/orders-batch" 2>&1); then
+	"$docuconf" exec -contract contract.cue -- "$work/orders-batch" 2>&1); then
 	echo "$out"
 	fail "the job failed with a valid environment"
 fi
@@ -40,7 +40,7 @@ echo "== PORT=0, no DATABASE_URL"
 if out=$(env -i PATH="$PATH" PORT=0 \
 	ORDERS_FILE="$here/orders.txt" \
 	DOCUCONF_TERMINATION_LOG="$work/termination-log" \
-	"$docuconf" exec --contract contract.cue -- "$work/orders-batch" 2>&1); then
+	"$docuconf" exec -contract contract.cue -- "$work/orders-batch" 2>&1); then
 	echo "$out"
 	fail "the job started with an invalid environment"
 fi
@@ -50,11 +50,35 @@ echo "$out" | grep -q "PORT: 0 is below min 1 (out_of_range)" || fail "out_of_ra
 echo "$out" | grep -q "orders-batch configuration" && fail "the job ran"
 grep -q missing_required "$work/termination-log" || fail "termination log not written"
 
+# Without docuconf exec the loader still enforces the ranges, and writes
+# the termination log.
+echo "== PORT=0, no docuconf exec"
+if out=$(env -i PATH="$PATH" PORT=0 \
+	DATABASE_URL=postgres://orders:s3cret@db:5432/orders \
+	ORDERS_FILE="$here/orders.txt" \
+	DOCUCONF_TERMINATION_LOG="$work/termination-log-loader" \
+	"$work/orders-batch" 2>&1); then
+	echo "$out"
+	fail "the job ran with PORT=0"
+fi
+echo "$out"
+echo "$out" | grep -q "^docuconf: 1 configuration problem:$" || fail "no header"
+echo "$out" | grep -q "^  PORT: is below min 1 (out_of_range)$" || fail "PORT=0 not reported by the loader"
+grep -q "PORT: is below min 1" "$work/termination-log-loader" || fail "the loader wrote no termination log"
+
+# -env-file values reach the program, and exec exports the defaults.
+echo "== -env-file"
+printf 'DATABASE_URL=postgres://orders:s3cret@db:5432/orders\nORDERS_FILE=%s\nWORKER_COUNT=7\n' "$here/orders.txt" >"$work/.env"
+out=$(env -i PATH="$PATH" "$docuconf" exec -contract contract.cue -env-file "$work/.env" -- "$work/orders-batch" 2>&1) ||
+	{ echo "$out"; fail "the job failed with an -env-file"; }
+echo "$out" | grep -q "WORKER_COUNT    7" || { echo "$out"; fail "the -env-file value did not reach the job"; }
+
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 	echo "== docker"
 	image=docuconf-cobol-orders:smoke
 	docker build -q -t "$image" . >/dev/null
-	out=$(docker run --rm -e DATABASE_URL=postgres://orders:s3cret@db:5432/orders \
+	out=$(docker run --rm -v "$here/orders.txt:/data/orders.txt:ro" \
+		-e DATABASE_URL=postgres://orders:s3cret@db:5432/orders \
 		-e ALLOWED_ORIGINS=https://shop.example.com,http://localhost:3000 "$image" 2>&1) ||
 		{ echo "$out"; fail "the container failed with a valid environment"; }
 	echo "$out" | grep -q "accepted total  67.49" || { echo "$out"; fail "unexpected summary in the container"; }

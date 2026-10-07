@@ -1,0 +1,26 @@
+env:
+  - name: ALLOWED_ORIGINS
+    value: https://shop.example.com,http://localhost:3000
+  - name: DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        name: orders-db
+        key: url
+  - name: ORDERS_FILE
+    value: /data/orders.txt
+volumes:
+  - configMap:
+      name: orders-input
+      defaultMode: 292
+      items:
+        - key: orders.txt
+          path: orders.txt
+    name: dc-orders
+volumeMounts:
+  - name: dc-orders
+    mountPath: /data
+    readOnly: true
+configMaps: []
+restartTriggers:
+  - kind: ConfigMap
+    name: orders-input

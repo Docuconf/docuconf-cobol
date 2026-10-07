@@ -120,18 +120,19 @@ func TestLoaderProblems(t *testing.T) {
 		"NAME=héllo", "TOKEN=hunter2", "COUNT=-1", "RATIO=0.125", "TIMEOUT=1500us",
 		"RETRY=00:00:00.5", "SHARDS=[\"a\"]", "TAGS=a;b;c", "VERBOSE=yes")
 	want := []string{
-		"docuconf: NAME: does not fit in T-NAME (PIC X(5)) (out_of_range)",
-		"docuconf: TOKEN: does not fit in T-TOKEN (PIC X(3)) (out_of_range)",
-		"docuconf: COUNT: is negative, and T-COUNT is unsigned (out_of_range)",
-		"docuconf: RATIO: has more decimal places than T-RATIO holds (out_of_range)",
-		"docuconf: TIMEOUT: is finer than the ms T-TIMEOUT counts in (out_of_range)",
-		"docuconf: RETRY: is finer than the s T-RETRY counts in (out_of_range)",
-		"docuconf: VERBOSE: is not true or false (invalid_type)",
-		"docuconf: SHARDS: has an item of the wrong JSON type (invalid_type)",
-		"docuconf: TAGS: has more items than its COBOL table holds (too_many_items)",
-		"docuconf: REGION: is required but not set (missing_required)",
+		"docuconf: 10 configuration problems:",
+		"  NAME: does not fit in T-NAME (PIC X(5)) (out_of_range)",
+		"  TOKEN: does not fit in T-TOKEN (PIC X(3)) (out_of_range)",
+		"  COUNT: is negative, and T-COUNT is unsigned (out_of_range)",
+		"  RATIO: has more decimal places than T-RATIO holds (out_of_range)",
+		"  TIMEOUT: is finer than the ms T-TIMEOUT counts in (out_of_range)",
+		"  RETRY: is finer than the s T-RETRY counts in (out_of_range)",
+		"  VERBOSE: is not true or false (invalid_type)",
+		"  SHARDS: has an item of the wrong JSON type (invalid_type)",
+		"  TAGS: has more items than its COBOL table holds (too_many_items)",
+		"  REGION: is required but not set (missing_required)",
 	}
-	if got := strings.TrimSpace(errOut); got != strings.Join(want, "\n") {
+	if got := strings.TrimRight(errOut, "\n"); got != strings.Join(want, "\n") {
 		t.Errorf("stderr:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
 	}
 	if !strings.HasPrefix(out, "RC=+000000001") {
@@ -139,5 +140,95 @@ func TestLoaderProblems(t *testing.T) {
 	}
 	if strings.Contains(errOut, "hunter2") {
 		t.Error("a secret value was printed")
+	}
+}
+
+// boundsProgram compiles testdata/BNDCFGC.cpy, a mainframe-style
+// copybook (sequence numbers, columns 73-80, no level-01 record, VALUE
+// defaults, tags in an inline comment), with a program that COPYs it
+// under its own 01, as such copybooks are used.
+func boundsProgram(t *testing.T) string {
+	t.Helper()
+	cobc, err := exec.LookPath("cobc")
+	if err != nil {
+		skipOrFail(t, "cobc (GnuCOBOL) not found")
+	}
+	dir := t.TempDir()
+	src, err := os.ReadFile("testdata/BNDCFGC.cpy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "BNDCFGC.cpy"), src, 0o644)
+	c, err := gen.Load(filepath.Join(dir, "BNDCFGC.cpy"), gen.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader, err := c.Loader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "BNDCFG.cbl"), loader, 0o644)
+	os.WriteFile(filepath.Join(dir, "main.cbl"), []byte(`       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MAIN.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CFG.
+       COPY BNDCFGC.
+       01  K PIC 9.
+       PROCEDURE DIVISION.
+           CALL "BNDCFG" USING WS-CFG
+           DISPLAY "RC=" RETURN-CODE END-DISPLAY
+           DISPLAY "WORKERS=" BC-WORKER-COUNT END-DISPLAY
+           DISPLAY "RATIO=" BC-RATIO END-DISPLAY
+           DISPLAY "TIMEOUT=" BC-TIMEOUT END-DISPLAY
+           DISPLAY "PORT=" BC-PORT END-DISPLAY
+           DISPLAY "VERBOSE=" BC-VERBOSE END-DISPLAY
+           DISPLAY "SHARDS=" BC-SHARD-COUNT END-DISPLAY
+           MOVE 0 TO RETURN-CODE
+           STOP RUN.
+`), 0o644)
+	cmd := exec.Command(cobc, "-x", "-o", "main", "main.cbl", "BNDCFG.cbl")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cobc: %v\n%s", err, out)
+	}
+	return filepath.Join(dir, "main")
+}
+
+// TestLoaderDefaultsFromValue: VALUE clauses and an inline @default are
+// the defaults.
+func TestLoaderDefaultsFromValue(t *testing.T) {
+	bin := boundsProgram(t)
+	out, errOut := runLoader(t, bin)
+	want := "RC=+000000000\nWORKERS=+0004\nRATIO=0.50\nTIMEOUT=0030000\nPORT=00080\nVERBOSE=Y\nSHARDS=0\n"
+	if out != want || errOut != "" {
+		t.Fatalf("stdout:\n%s\nstderr:\n%s\nwant:\n%s", out, errOut, want)
+	}
+}
+
+// TestLoaderBounds: without docuconf exec, the loader still enforces
+// @min, @max, @item-min and @item-max, and writes the termination log.
+func TestLoaderBounds(t *testing.T) {
+	bin := boundsProgram(t)
+	tlog := filepath.Join(t.TempDir(), "termination-log")
+	out, errOut := runLoader(t, bin, "WORKER_COUNT=500", "RATIO=0.95", "TIMEOUT=10m", "SHARDS=5,12",
+		"DOCUCONF_TERMINATION_LOG="+tlog)
+	want := `docuconf: 4 configuration problems:
+  WORKER_COUNT: is above max 64 (out_of_range)
+  RATIO: is above max 0.9 (out_of_range)
+  TIMEOUT: is above max 5m (out_of_range)
+  SHARDS: has an item above itemMax 9 (out_of_range)
+`
+	if errOut != want || !strings.HasPrefix(out, "RC=+000000001") {
+		t.Fatalf("stdout:\n%s\nstderr:\n%s\nwant:\n%s", out, errOut, want)
+	}
+	if got, _ := os.ReadFile(tlog); string(got) != want {
+		t.Errorf("termination log:\n%s\nwant:\n%s", got, want)
+	}
+	_, errOut = runLoader(t, bin, "WORKER_COUNT=0", "RATIO=0.05", "TIMEOUT=500ms", "SHARDS=-1")
+	for _, w := range []string{"WORKER_COUNT: is below min 1", "RATIO: is below min 0.1", "TIMEOUT: is below min 1s", "SHARDS: has an item below itemMin 0"} {
+		if !strings.Contains(errOut, "  "+w+" (out_of_range)\n") {
+			t.Errorf("want %q in:\n%s", w, errOut)
+		}
 	}
 }

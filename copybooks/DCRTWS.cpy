@@ -1,6 +1,9 @@
       *> docuconf runtime: working storage for a generated loader.
       *> docuconf-cobol generate inlines it into every loader, so a
-      *> loader compiles on its own. Valid in fixed and free format.
+      *> loader compiles on its own, or, with -runtime copy, the loader
+      *> COPYs it from a shared copy library. Every name starts DC-;
+      *> generate rejects a copybook that uses one of them.
+      *> Valid in fixed and free format.
        01  DC-WORK.
            05  DC-NAME             PIC X(64).
            05  DC-NAME-LEN         PIC 9(4) COMP-5.
@@ -46,6 +49,11 @@
            05  DC-PATH             PIC X(8192).
            05  DC-ITEM-COUNT       PIC 9(5) COMP-5.
            05  DC-ITEM-LIMIT       PIC 9(5) COMP-5.
+           05  DC-HEAD             PIC X(64).
+           05  DC-TLOG-PATH        PIC X(4096).
+           05  DC-TLOG-STATUS      PIC XX.
+           05  DC-LINES            OCCURS 100.
+               10  DC-LINE         PIC X(256).
            05  DC-ITEMS            OCCURS 1000.
                10  DC-ITEM         PIC X(1024).
                10  DC-ITEM-LEN     PIC 9(5) COMP-5.
