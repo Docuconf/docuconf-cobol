@@ -3,6 +3,15 @@ name: ci
 on:
   push:
   pull_request:
+  schedule:
+    # Nightly against docuconf-go main; push and pull_request use .github/docuconf-go.ref.
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      docuconf_go_ref:
+        description: docuconf-go ref to test against (empty means .github/docuconf-go.ref)
+        required: false
+        default: ""
 
 # Until docuconf-go merges docuconf exec (claude/docuconf-exec), its main
 # has no exec command, so the conformance and smoke steps fail. That is
@@ -12,13 +21,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - name: Pick the docuconf-go ref
+        id: dcref
+        env:
+          EVENT: ${{ github.event_name }}
+          OVERRIDE: ${{ inputs.docuconf_go_ref }}
+        run: |
+          if [ "$EVENT" = schedule ]; then echo "ref=main" >> "$GITHUB_OUTPUT"
+          elif [ -n "$OVERRIDE" ]; then echo "ref=$OVERRIDE" >> "$GITHUB_OUTPUT"
+          else echo "ref=$(tr -d '[:space:]' < .github/docuconf-go.ref)" >> "$GITHUB_OUTPUT"; fi
+      - name: Check out docuconf-go
+        uses: actions/checkout@v4
         with:
           repository: docuconf/docuconf-go
+          ref: ${{ steps.dcref.outputs.ref }}
           path: docuconf-go
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+      - name: go.mod and .github/docuconf-go.ref pin the same docuconf-go
+        run: scripts/check-docuconf-go-pin.sh
       - name: Install GnuCOBOL and cue
         run: |
           sudo apt-get update -qq
@@ -41,6 +63,8 @@ jobs:
           DOCUCONF_CONFORMANCE: ${{ github.workspace }}/docuconf-go/conformance/cases.json
           DOCUCONF_REQUIRE_CONFORMANCE: "1"
         run: go test ./...
+      - name: Run scripts/conformance.sh
+        run: DOCUCONF_GO_DIR="$GITHUB_WORKSPACE/docuconf-go" scripts/conformance.sh
       - name: cue vet -c the example contract
         run: |
           mod="$(mktemp -d)"
