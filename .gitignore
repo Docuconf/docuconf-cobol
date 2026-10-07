@@ -1,0 +1,5 @@
+/docuconf-cobol
+/dist/
+*.so
+*.o
+examples/orders/orders-batch

@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# Until docuconf-go merges docuconf exec (claude/docuconf-exec), its main
+# has no exec command, so the conformance and smoke steps fail. That is
+# expected.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: docuconf/docuconf-go
+          path: docuconf-go
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Install GnuCOBOL and cue
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gnucobol3
+          go install cuelang.org/go/cmd/cue@v0.17.1
+      - name: Build the docuconf CLI from docuconf-go
+        working-directory: docuconf-go/cmd/docuconf
+        run: go build -o "$RUNNER_TEMP/bin/docuconf" . && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build and vet the generator
+        run: |
+          test -z "$(gofmt -l cmd internal copybooks tests)"
+          go build ./...
+          go vet ./...
+      - name: Generated files are up to date
+        run: go run ./cmd/docuconf-cobol generate -check examples/orders/orders-config.cpy
+      - name: Generator, loader and conformance tests
+        env:
+          DOCUCONF: ${{ runner.temp }}/bin/docuconf
+          DOCUCONF_SPEC: ${{ github.workspace }}/docuconf-go/spec/cue
+          DOCUCONF_CONFORMANCE: ${{ github.workspace }}/docuconf-go/conformance/cases.json
+          DOCUCONF_REQUIRE_CONFORMANCE: "1"
+        run: go test ./...
+      - name: cue vet -c the example contract
+        run: |
+          mod="$(mktemp -d)"
+          cp -r docuconf-go/spec/cue/cue.mod docuconf-go/spec/cue/contract "$mod/"
+          mkdir "$mod/orders"
+          cp examples/orders/contract.cue "$mod/orders/"
+          cd "$mod" && cue vet -c ./orders
+      - name: Example smoke test
+        env:
+          DOCUCONF: ${{ runner.temp }}/bin/docuconf
+        run: examples/orders/smoke.sh
