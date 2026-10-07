@@ -1,0 +1,5 @@
+A-1001 https://shop.example.com 19.99
+A-1002 https://shop.example.com 5.00
+A-1003 http://localhost:3000 42.50
+A-1004 https://unknown.example.net 7.25
+A-1005 https://partner.example.org 120.00
