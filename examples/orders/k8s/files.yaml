@@ -1,0 +1,4 @@
+# Where each file input comes from: the orders file is the key orders.txt
+# of the ConfigMap orders-input.
+orders:
+  configMap: {name: orders-input, key: orders.txt}

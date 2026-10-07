@@ -23,7 +23,7 @@ const fixed = `      *> Settings.
 `
 
 func TestParseFixed(t *testing.T) {
-	roots, err := Parse("demo.cpy", fixed, Fixed)
+	roots, _, err := Parse("demo.cpy", fixed, Fixed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +65,11 @@ func TestParseFree(t *testing.T) {
 	for _, l := range strings.Split(fixed, "\n") {
 		free.WriteString(strings.TrimLeft(l, " ") + "\n")
 	}
-	got, err := Parse("demo.cpy", free.String(), Free)
+	got, _, err := Parse("demo.cpy", free.String(), Free)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := Parse("demo.cpy", fixed, Fixed)
+	want, _, _ := Parse("demo.cpy", fixed, Fixed)
 	if len(got[0].Children) != len(want[0].Children) || got[0].Children[1].Doc[0].Text != "@default info" {
 		t.Fatalf("free format parsed differently: %+v", got[0])
 	}
@@ -77,16 +77,71 @@ func TestParseFree(t *testing.T) {
 
 func TestFixedFormatErrors(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
-		{"      *> " + strings.Repeat("x", 70) + "\n       01  A.\n", "demo.cpy:1: comment runs past column 72"},
 		{"01  DEMO-CONFIG.\n", "column 7 holds"},
 		{"       01  A.\n      -    \"x\".\n", "continuation lines are not supported"},
 		{"       01  A\n", "does not end with a period"},
-		{"       05  A PIC X.\n", "is not under a level-01 record"},
+		{"       77  A PIC X.\n       05  B PIC X.\n", "is not under a level-01 record"},
 	} {
-		_, err := Parse("demo.cpy", c.src, Fixed)
+		_, _, err := Parse("demo.cpy", c.src, Fixed)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%q: got %v, want %q", c.src, err, c.want)
 		}
+	}
+}
+
+// Columns 73-80 are the identification area, ignored as cobc ignores
+// them, in comment lines as in code lines.
+func TestIdentificationArea(t *testing.T) {
+	src := "" +
+		"000100* @SERVICE ORDERS-BATCH  @PREFIX CFG-                             ORDCFGC\n" +
+		"000200 01  ORDERS-CONFIG.                                               ORDCFGC\n" +
+		"000300* Port of the metrics endpoint                                    ORDCFGC\n" +
+		"000400     05  CFG-PORT  PIC 9(5).                                      ORDCFGC\n"
+	roots, warns, err := Parse("ORDCFGC.cpy", src, Fixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 0 {
+		t.Errorf("warnings: %v", warns)
+	}
+	rec := roots[0]
+	if rec.Doc[0].Text != "@SERVICE ORDERS-BATCH  @PREFIX CFG-" || rec.Children[0].Doc[0].Text != "Port of the metrics endpoint" {
+		t.Errorf("doc: %+v %+v", rec.Doc, rec.Children[0].Doc)
+	}
+
+	// An annotation that runs into column 73 is a warning.
+	cut := "      *> Port " + strings.Repeat(".", 49) + " @max 655" + "35\n" +
+		"       01  A.\n"
+	_, warns, err = Parse("demo.cpy", cut, Fixed)
+	if err != nil || len(warns) != 1 || warns[0].String() != `demo.cpy:1: warning: the annotation "@max 655" is cut at column 72 (cobc ignores columns 73-80); move it to the next comment line` {
+		t.Errorf("got %v %v", warns, err)
+	}
+	_, warns, _ = Parse("demo.cpy", "      *> Port"+strings.Repeat(" ", 59)+"@max 1\n       01  A.\n", Fixed)
+	if len(warns) != 1 || !strings.Contains(warns[0].Msg, `columns 73-80 hold "@max 1"`) {
+		t.Errorf("got %v", warns)
+	}
+}
+
+// A copybook of fields with no level-01 record gets a synthetic record.
+func TestNoRecord(t *testing.T) {
+	roots, _, err := Parse("f.cpy", "      *> Port\n           05  CFG-PORT PIC 9(5).\n           05  CFG-GRP.\n               10  CFG-X PIC X.\n", Fixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 1 || !roots[0].Synthetic || len(roots[0].Children) != 2 || roots[0].Children[1].Children[0].Name != "CFG-X" {
+		t.Fatalf("roots: %+v", roots[0])
+	}
+}
+
+// An inline comment is marked, so its tags can be read.
+func TestInlineComment(t *testing.T) {
+	roots, _, err := Parse("f.cpy", "       01  R.\n           05  CFG-PORT PIC 9(5).  *> port number @default 80\n", Fixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := roots[0].Children[0].Doc
+	if len(d) != 1 || !d[0].Inline || d[0].Text != "port number @default 80" {
+		t.Fatalf("doc: %+v", d)
 	}
 }
 

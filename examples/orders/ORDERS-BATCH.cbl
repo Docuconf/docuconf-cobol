@@ -34,14 +34,12 @@
        MAIN.
            CALL "ORDCFG" USING ORDERS-CONFIG
            IF RETURN-CODE NOT = 0
-               DISPLAY "orders-batch: configuration problems; stopping"
-                   UPON SYSERR
-               END-DISPLAY
-               STOP RUN RETURNING 1
+               STOP RUN
            END-IF
            PERFORM SHOW-CONFIG
            PERFORM SUMMARISE
-           STOP RUN RETURNING 0.
+           MOVE 0 TO RETURN-CODE
+           STOP RUN.
 
       *> The typed configuration. DATABASE_URL is a secret: never shown.
        SHOW-CONFIG.
@@ -73,7 +71,8 @@
            IF WS-STATUS NOT = "00"
                DISPLAY "orders-batch: cannot open the orders file, "
                    "status " WS-STATUS UPON SYSERR END-DISPLAY
-               STOP RUN RETURNING 1
+               MOVE 1 TO RETURN-CODE
+               STOP RUN
            END-IF
            PERFORM UNTIL WS-EOF = "Y"
                READ ORDERS-FILE

@@ -4,16 +4,29 @@
       *>
       *> CALL "GWCFG" USING GATEWAY-CONFIG reads the
       *> environment into the record and converts each value. On a
-      *> problem it prints one line per problem on stderr and sets
-      *> RETURN-CODE to 1. Run the program under docuconf exec, which
-      *> checks every rule in contract.cue before the program starts.
+      *> problem it prints every problem on stderr, writes them to
+      *> the termination log and sets RETURN-CODE to 1. Run the
+      *> program under docuconf exec, which also checks the rules
+      *> COBOL cannot (patterns, schemes, certificates) first.
        IDENTIFICATION DIVISION.
        PROGRAM-ID. GWCFG.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT DC-TLOG ASSIGN TO DC-TLOG-PATH
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS DC-TLOG-STATUS.
        DATA DIVISION.
+       FILE SECTION.
+       FD  DC-TLOG.
+       01  DC-TLOG-LINE            PIC X(256).
        WORKING-STORAGE SECTION.
       *> docuconf runtime: working storage for a generated loader.
       *> docuconf-cobol generate inlines it into every loader, so a
-      *> loader compiles on its own. Valid in fixed and free format.
+      *> loader compiles on its own, or, with -runtime copy, the loader
+      *> COPYs it from a shared copy library. Every name starts DC-;
+      *> generate rejects a copybook that uses one of them.
+      *> Valid in fixed and free format.
        01  DC-WORK.
            05  DC-NAME             PIC X(64).
            05  DC-NAME-LEN         PIC 9(4) COMP-5.
@@ -59,6 +72,11 @@
            05  DC-PATH             PIC X(8192).
            05  DC-ITEM-COUNT       PIC 9(5) COMP-5.
            05  DC-ITEM-LIMIT       PIC 9(5) COMP-5.
+           05  DC-HEAD             PIC X(64).
+           05  DC-TLOG-PATH        PIC X(4096).
+           05  DC-TLOG-STATUS      PIC XX.
+           05  DC-LINES            OCCURS 100.
+               10  DC-LINE         PIC X(256).
            05  DC-ITEMS            OCCURS 1000.
                10  DC-ITEM         PIC X(1024).
                10  DC-ITEM-LEN     PIC 9(5) COMP-5.
@@ -68,39 +86,40 @@
        PROCEDURE DIVISION USING GATEWAY-CONFIG.
        DC-MAIN.
            MOVE 0 TO DC-PROBLEMS
-           PERFORM DC-VAR-1
-           PERFORM DC-VAR-2
-           PERFORM DC-VAR-3
-           PERFORM DC-VAR-4
-           PERFORM DC-VAR-5
-           PERFORM DC-VAR-6
-           PERFORM DC-VAR-7
-           PERFORM DC-VAR-8
-           PERFORM DC-VAR-9
-           PERFORM DC-VAR-10
-           PERFORM DC-VAR-11
-           PERFORM DC-VAR-12
-           PERFORM DC-VAR-13
-           PERFORM DC-VAR-14
-           PERFORM DC-VAR-15
-           PERFORM DC-VAR-16
-           PERFORM DC-VAR-17
-           PERFORM DC-VAR-18
-           PERFORM DC-FILE-1
-           PERFORM DC-FILE-2
-           PERFORM DC-FILE-3
-           PERFORM DC-FILE-4
-           PERFORM DC-FILE-5
-           PERFORM DC-FILE-6
+           PERFORM DCV-GW-REPORT-NAME
+           PERFORM DCV-GW-PORT
+           PERFORM DCV-GW-OFFSET
+           PERFORM DCV-GW-SAMPLE-RATIO
+           PERFORM DCV-GW-SCALE
+           PERFORM DCV-GW-STRICT
+           PERFORM DCV-GW-VERBOSE
+           PERFORM DCV-GW-REQUEST-TIMEOUT
+           PERFORM DCV-GW-RETRY-INTERVAL
+           PERFORM DCV-GW-UPSTREAM
+           PERFORM DCV-GW-LOG-LEVEL
+           PERFORM DCV-GW-REGION
+           PERFORM DCV-GW-SHARDS
+           PERFORM DCV-GW-TAGS
+           PERFORM DCV-GW-RATE-LIMITS
+           PERFORM DCV-GW-API-TOKEN
+           PERFORM DCV-GW-PARTNER-KEYSTORE-P-17
+           PERFORM DCV-GW-BROKERS
+           PERFORM DCF-GW-TLS-DIR
+           PERFORM DCF-GW-CA-PATH
+           PERFORM DCF-GW-KEYSTORE-PATH
+           PERFORM DCF-GW-ROUTES-PATH
+           PERFORM DCF-GW-LICENCE-PATH
+           PERFORM DCF-GW-GEOIP-PATH
            IF DC-PROBLEMS = 0
                MOVE 0 TO RETURN-CODE
            ELSE
+               PERFORM DC-REPORT
                MOVE 1 TO RETURN-CODE
            END-IF
            GOBACK.
 
       *> REPORT_NAME into GW-REPORT-NAME
-       DC-VAR-1.
+       DCV-GW-REPORT-NAME.
            MOVE "REPORT_NAME" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-SET = "N"
@@ -121,7 +140,7 @@
            END-IF.
 
       *> PORT into GW-PORT
-       DC-VAR-2.
+       DCV-GW-PORT.
            MOVE "PORT" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -147,12 +166,22 @@
                                MOVE "out_of_range" TO DC-CODE
                                PERFORM DC-PROBLEM
                        END-COMPUTE
+                       IF DC-OK = "Y" AND DC-INT < 1
+                           MOVE "is below min 1" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
+                       IF DC-OK = "Y" AND DC-INT > 65535
+                           MOVE "is above max 65535" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
                    END-IF
                END-IF
            END-IF.
 
       *> OFFSET into GW-OFFSET
-       DC-VAR-3.
+       DCV-GW-OFFSET.
            MOVE "OFFSET" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -176,7 +205,7 @@
            END-IF.
 
       *> SAMPLE_RATIO into GW-SAMPLE-RATIO
-       DC-VAR-4.
+       DCV-GW-SAMPLE-RATIO.
            MOVE "SAMPLE_RATIO" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -212,12 +241,18 @@
                            MOVE "out_of_range" TO DC-CODE
                            PERFORM DC-PROBLEM
                        END-IF
+                       IF DC-OK = "Y" AND FUNCTION
+                         NUMVAL-F(DC-TMP(1:DC-TMP-LEN)) > 1
+                           MOVE "is above max 1" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
                    END-IF
                END-IF
            END-IF.
 
       *> SCALE into GW-SCALE
-       DC-VAR-5.
+       DCV-GW-SCALE.
            MOVE "SCALE" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -241,7 +276,7 @@
            END-IF.
 
       *> STRICT into GW-STRICT
-       DC-VAR-6.
+       DCV-GW-STRICT.
            MOVE "STRICT" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -258,7 +293,7 @@
            END-IF.
 
       *> VERBOSE into GW-VERBOSE
-       DC-VAR-7.
+       DCV-GW-VERBOSE.
            MOVE "VERBOSE" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -278,7 +313,7 @@
            END-IF.
 
       *> REQUEST_TIMEOUT into GW-REQUEST-TIMEOUT
-       DC-VAR-8.
+       DCV-GW-REQUEST-TIMEOUT.
            MOVE "REQUEST_TIMEOUT" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -316,12 +351,22 @@
                            MOVE "out_of_range" TO DC-CODE
                            PERFORM DC-PROBLEM
                        END-IF
+                       IF DC-OK = "Y" AND DC-NS < 1000000000
+                           MOVE "is below min 1s" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
+                       IF DC-OK = "Y" AND DC-NS > 300000000000
+                           MOVE "is above max 5m" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
                    END-IF
                END-IF
            END-IF.
 
       *> RETRY_INTERVAL into GW-RETRY-INTERVAL
-       DC-VAR-9.
+       DCV-GW-RETRY-INTERVAL.
            MOVE "RETRY_INTERVAL" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -364,7 +409,7 @@
            END-IF.
 
       *> UPSTREAM into GW-UPSTREAM
-       DC-VAR-10.
+       DCV-GW-UPSTREAM.
            MOVE "UPSTREAM" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -388,7 +433,7 @@
            END-IF.
 
       *> LOG_LEVEL into GW-LOG-LEVEL
-       DC-VAR-11.
+       DCV-GW-LOG-LEVEL.
            MOVE "LOG_LEVEL" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -422,7 +467,7 @@
            END-IF.
 
       *> REGION into GW-REGION
-       DC-VAR-12.
+       DCV-GW-REGION.
            MOVE "REGION" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -457,7 +502,7 @@
            END-IF.
 
       *> SHARDS into GW-SHARDS
-       DC-VAR-13.
+       DCV-GW-SHARDS.
            MOVE "SHARDS" TO DC-NAME
            MOVE 16 TO DC-ITEM-LIMIT
            PERFORM DC-GET-ENV
@@ -476,7 +521,7 @@
                IF DC-OK = "Y"
                    PERFORM VARYING DC-K FROM 1 BY 1
                            UNTIL DC-K > DC-ITEM-COUNT
-                       PERFORM DC-VAR-13-ITEM
+                       PERFORM DCI-GW-SHARDS
                    END-PERFORM
                ELSE
                    MOVE 0 TO DC-ITEM-COUNT
@@ -484,7 +529,7 @@
            END-IF
            MOVE DC-ITEM-COUNT TO GW-SHARD-COUNT.
 
-       DC-VAR-13-ITEM.
+       DCI-GW-SHARDS.
            IF DC-ITEM-KIND(DC-K) NOT = "N"
                MOVE "has an item of the wrong JSON type" TO DC-MSG
                MOVE "invalid_type" TO DC-CODE
@@ -506,13 +551,18 @@
                            MOVE "out_of_range" TO DC-CODE
                            PERFORM DC-PROBLEM
                    END-COMPUTE
+                   IF DC-OK = "Y" AND DC-INT > 1023
+                       MOVE "has an item above itemMax 1023" TO DC-MSG
+                       MOVE "out_of_range" TO DC-CODE
+                       PERFORM DC-PROBLEM
+                   END-IF
                END-IF
            END-IF
            END-IF
            .
 
       *> TAGS into GW-TAGS
-       DC-VAR-14.
+       DCV-GW-TAGS.
            MOVE "TAGS" TO DC-NAME
            MOVE 5 TO DC-ITEM-LIMIT
            PERFORM DC-GET-ENV
@@ -536,7 +586,7 @@
                IF DC-OK = "Y"
                    PERFORM VARYING DC-K FROM 1 BY 1
                            UNTIL DC-K > DC-ITEM-COUNT
-                       PERFORM DC-VAR-14-ITEM
+                       PERFORM DCI-GW-TAGS
                    END-PERFORM
                ELSE
                    MOVE 0 TO DC-ITEM-COUNT
@@ -544,7 +594,7 @@
            END-IF
            MOVE DC-ITEM-COUNT TO GW-TAG-COUNT.
 
-       DC-VAR-14-ITEM.
+       DCI-GW-TAGS.
            PERFORM DC-ITEM-TO-RAW
            IF DC-LEN > 10
                MOVE "does not fit in GW-TAGS (PIC X(10))" TO DC-MSG
@@ -559,7 +609,7 @@
            .
 
       *> RATE_LIMITS into GW-RATE-LIMITS
-       DC-VAR-15.
+       DCV-GW-RATE-LIMITS.
            MOVE "RATE_LIMITS" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -583,7 +633,7 @@
            END-IF.
 
       *> API_TOKEN into GW-API-TOKEN
-       DC-VAR-16.
+       DCV-GW-API-TOKEN.
            MOVE "API_TOKEN" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-SET = "N"
@@ -603,7 +653,7 @@
            END-IF.
 
       *> PARTNER_KEYSTORE_PASSWORD into GW-PARTNER-KEYSTORE-PASSWORD
-       DC-VAR-17.
+       DCV-GW-PARTNER-KEYSTORE-P-17.
            MOVE "PARTNER_KEYSTORE_PASSWORD" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-SET = "N"
@@ -628,7 +678,7 @@
            END-IF.
 
       *> BROKERS into GW-BROKERS
-       DC-VAR-18.
+       DCV-GW-BROKERS.
            MOVE "BROKERS" TO DC-NAME
            MOVE 4 TO DC-ITEM-LIMIT
            PERFORM DC-READ-INDEXED
@@ -641,9 +691,15 @@
                MOVE 0 TO DC-ITEM-COUNT
            ELSE
                IF DC-OK = "Y"
+                   IF DC-ITEM-COUNT < 1
+                       MOVE "has too few items, below minItems 1"
+                         TO DC-MSG
+                       MOVE "too_few_items" TO DC-CODE
+                       PERFORM DC-PROBLEM
+                   END-IF
                    PERFORM VARYING DC-K FROM 1 BY 1
                            UNTIL DC-K > DC-ITEM-COUNT
-                       PERFORM DC-VAR-18-ITEM
+                       PERFORM DCI-GW-BROKERS
                    END-PERFORM
                ELSE
                    MOVE 0 TO DC-ITEM-COUNT
@@ -651,7 +707,7 @@
            END-IF
            MOVE DC-ITEM-COUNT TO GW-BROKER-COUNT.
 
-       DC-VAR-18-ITEM.
+       DCI-GW-BROKERS.
            PERFORM DC-ITEM-TO-RAW
            IF DC-LEN > 40
                MOVE "does not fit in GW-BROKERS (PIC X(40))" TO DC-MSG
@@ -666,7 +722,7 @@
            .
 
       *> file input serving-tls: its path into GW-TLS-DIR
-       DC-FILE-1.
+       DCF-GW-TLS-DIR.
            MOVE SPACES TO DC-RAW
            MOVE "/etc/gateway/tls" TO DC-RAW
            MOVE 16 TO DC-LEN
@@ -685,7 +741,7 @@
            END-IF.
 
       *> file input upstream-ca: its path into GW-CA-PATH
-       DC-FILE-2.
+       DCF-GW-CA-PATH.
            MOVE SPACES TO DC-RAW
            MOVE "/etc/gateway/ca/ca.pem" TO DC-RAW
            MOVE 22 TO DC-LEN
@@ -704,7 +760,7 @@
            END-IF.
 
       *> file input partner-keystore: its path into GW-KEYSTORE-PATH
-       DC-FILE-3.
+       DCF-GW-KEYSTORE-PATH.
            MOVE SPACES TO DC-RAW
            MOVE "/etc/gateway/ks/p.p12" TO DC-RAW
            MOVE 21 TO DC-LEN
@@ -724,7 +780,7 @@
            END-IF.
 
       *> file input routes: its path into GW-ROUTES-PATH
-       DC-FILE-4.
+       DCF-GW-ROUTES-PATH.
            MOVE SPACES TO DC-RAW
            MOVE "/etc/gateway/routes/routes.yaml" TO DC-RAW
            MOVE 31 TO DC-LEN
@@ -743,7 +799,7 @@
            END-IF.
 
       *> file input licence: its path into GW-LICENCE-PATH
-       DC-FILE-5.
+       DCF-GW-LICENCE-PATH.
            MOVE "LICENCE_FILE" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-SET = "N" OR DC-LEN = 0
@@ -766,7 +822,7 @@
            END-IF.
 
       *> file input geoip: its path into GW-GEOIP-PATH
-       DC-FILE-6.
+       DCF-GW-GEOIP-PATH.
            MOVE SPACES TO DC-RAW
            MOVE "/var/lib/geoip/GeoLite2.mmdb" TO DC-RAW
            MOVE 28 TO DC-LEN
@@ -785,22 +841,80 @@
            END-IF.
 
       *> docuconf runtime: paragraphs for a generated loader.
-      *> docuconf-cobol generate inlines it into every loader. Each
+      *> docuconf-cobol generate inlines it into every loader, or the
+      *> loader COPYs it (-runtime copy). The loader declares the
+      *> termination log file DC-TLOG, with record DC-TLOG-LINE. Each
       *> paragraph works on DC-WORK (DCRTWS.cpy): DC-NAME is the
       *> variable being read, DC-RAW(1:DC-LEN) its value, and a
       *> problem is reported through DC-PROBLEM, which never prints
       *> the value.
       *> Valid in fixed and free format.
 
-      *> Prints DC-NAME, DC-MSG and DC-CODE on stderr and counts it.
+      *> Records a problem: DC-NAME, DC-MSG and DC-CODE. DC-REPORT
+      *> prints them all at the end.
        DC-PROBLEM.
            ADD 1 TO DC-PROBLEMS
            MOVE "N" TO DC-OK
-           DISPLAY "docuconf: " DC-NAME(1:DC-NAME-LEN) ": "
-               FUNCTION TRIM(DC-MSG TRAILING) " ("
-               FUNCTION TRIM(DC-CODE TRAILING) ")"
-               UPON SYSERR
-           END-DISPLAY.
+           IF DC-PROBLEMS <= 100
+               MOVE SPACES TO DC-LINE(DC-PROBLEMS)
+               STRING "  " DC-NAME(1:DC-NAME-LEN) ": "
+                   FUNCTION TRIM(DC-MSG TRAILING) " ("
+                   FUNCTION TRIM(DC-CODE TRAILING) ")"
+                   DELIMITED BY SIZE INTO DC-LINE(DC-PROBLEMS)
+               END-STRING
+           END-IF.
+
+      *> Prints every problem on stderr, under one header, as every
+      *> docuconf SDK does, and writes the same lines to the
+      *> termination log: DOCUCONF_TERMINATION_LOG ("-" for none), else
+      *> /dev/termination-log when it exists.
+       DC-REPORT.
+           MOVE SPACES TO DC-HEAD
+           IF DC-PROBLEMS = 1
+               MOVE "docuconf: 1 configuration problem:" TO DC-HEAD
+           ELSE
+               MOVE DC-PROBLEMS TO DC-IDX-ED
+               STRING "docuconf: " FUNCTION TRIM(DC-IDX-ED)
+                   " configuration problems:"
+                   DELIMITED BY SIZE INTO DC-HEAD
+               END-STRING
+           END-IF
+           DISPLAY FUNCTION TRIM(DC-HEAD TRAILING) UPON SYSERR
+           END-DISPLAY
+           PERFORM VARYING DC-K FROM 1 BY 1
+                   UNTIL DC-K > DC-PROBLEMS OR DC-K > 100
+               DISPLAY FUNCTION TRIM(DC-LINE(DC-K) TRAILING)
+                   UPON SYSERR
+               END-DISPLAY
+           END-PERFORM
+           MOVE SPACES TO DC-TLOG-PATH
+           ACCEPT DC-TLOG-PATH
+               FROM ENVIRONMENT "DOCUCONF_TERMINATION_LOG"
+               ON EXCEPTION
+                   MOVE SPACES TO DC-TLOG-PATH
+           END-ACCEPT
+           IF DC-TLOG-PATH = SPACES
+               MOVE "/dev/termination-log" TO DC-TLOG-PATH
+               OPEN INPUT DC-TLOG
+               IF DC-TLOG-STATUS = "00"
+                   CLOSE DC-TLOG
+               ELSE
+                   MOVE "-" TO DC-TLOG-PATH
+               END-IF
+           END-IF
+           IF DC-TLOG-PATH NOT = "-"
+               OPEN OUTPUT DC-TLOG
+               IF DC-TLOG-STATUS = "00"
+                   MOVE DC-HEAD TO DC-TLOG-LINE
+                   WRITE DC-TLOG-LINE END-WRITE
+                   PERFORM VARYING DC-K FROM 1 BY 1
+                           UNTIL DC-K > DC-PROBLEMS OR DC-K > 100
+                       MOVE DC-LINE(DC-K) TO DC-TLOG-LINE
+                       WRITE DC-TLOG-LINE END-WRITE
+                   END-PERFORM
+                   CLOSE DC-TLOG
+               END-IF
+           END-IF.
 
        DC-BAD-TYPE.
            MOVE "invalid_type" TO DC-CODE

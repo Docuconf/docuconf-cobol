@@ -1,0 +1,41 @@
+# The same job reading its input from a PersistentVolumeClaim, the usual
+# home of batch input (a ConfigMap holds at most 1 MiB). The contract has
+# no PVC file source yet, so docuconf render does not write this volume:
+# mount it yourself and point ORDERS_FILE at the file. docuconf exec still
+# checks the file (present, at most 1 MiB) before the job starts.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: orders-batch
+spec:
+  schedule: "15 2 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: orders-batch
+              image: registry.example.com/orders-batch:1.0.0
+              terminationMessagePolicy: FallbackToLogsOnError
+              env:
+                - name: ALLOWED_ORIGINS
+                  value: https://shop.example.com,http://localhost:3000
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: orders-db
+                      key: url
+                - name: ORDERS_FILE
+                  value: /batch/in/orders.txt
+              volumeMounts:
+                - name: batch
+                  mountPath: /batch
+                  readOnly: true
+          volumes:
+            - name: batch
+              persistentVolumeClaim:
+                claimName: orders-batch-data
+                readOnly: true

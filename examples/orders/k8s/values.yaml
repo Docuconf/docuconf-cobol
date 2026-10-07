@@ -1,0 +1,4 @@
+# What the platform supplies for orders-batch in production.
+DATABASE_URL:
+  secretKeyRef: {name: orders-db, key: url}
+ALLOWED_ORIGINS: [https://shop.example.com, http://localhost:3000]

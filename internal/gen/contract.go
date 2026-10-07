@@ -65,5 +65,8 @@ func (c *Config) ContractCUE() ([]byte, error) {
 		}
 		return nil, &Error{ps}
 	}
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }

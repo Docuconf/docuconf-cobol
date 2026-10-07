@@ -1,0 +1,44 @@
+# The orders job as a CronJob. env, volumes and volumeMounts are what
+# "docuconf render -contract contract.cue -values k8s/values.yaml
+# -files k8s/files.yaml" writes (k8s/rendered.yaml): the platform pastes
+# or templates them in, so the pod spec cannot drift from the contract.
+# The ConfigMap orders-input holds the orders under the key orders.txt.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: orders-batch
+spec:
+  schedule: "15 2 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: orders-batch
+              image: registry.example.com/orders-batch:1.0.0
+              terminationMessagePolicy: FallbackToLogsOnError
+              env:
+                - name: ALLOWED_ORIGINS
+                  value: https://shop.example.com,http://localhost:3000
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: orders-db
+                      key: url
+                - name: ORDERS_FILE
+                  value: /data/orders.txt
+              volumeMounts:
+                - name: dc-orders
+                  mountPath: /data
+                  readOnly: true
+          volumes:
+            - configMap:
+                name: orders-input
+                defaultMode: 292
+                items:
+                  - key: orders.txt
+                    path: orders.txt
+              name: dc-orders

@@ -4,16 +4,29 @@
       *>
       *> CALL "ORDCFG" USING ORDERS-CONFIG reads the
       *> environment into the record and converts each value. On a
-      *> problem it prints one line per problem on stderr and sets
-      *> RETURN-CODE to 1. Run the program under docuconf exec, which
-      *> checks every rule in contract.cue before the program starts.
+      *> problem it prints every problem on stderr, writes them to
+      *> the termination log and sets RETURN-CODE to 1. Run the
+      *> program under docuconf exec, which also checks the rules
+      *> COBOL cannot (patterns, schemes, certificates) first.
        IDENTIFICATION DIVISION.
        PROGRAM-ID. ORDCFG.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT DC-TLOG ASSIGN TO DC-TLOG-PATH
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS DC-TLOG-STATUS.
        DATA DIVISION.
+       FILE SECTION.
+       FD  DC-TLOG.
+       01  DC-TLOG-LINE            PIC X(256).
        WORKING-STORAGE SECTION.
       *> docuconf runtime: working storage for a generated loader.
       *> docuconf-cobol generate inlines it into every loader, so a
-      *> loader compiles on its own. Valid in fixed and free format.
+      *> loader compiles on its own, or, with -runtime copy, the loader
+      *> COPYs it from a shared copy library. Every name starts DC-;
+      *> generate rejects a copybook that uses one of them.
+      *> Valid in fixed and free format.
        01  DC-WORK.
            05  DC-NAME             PIC X(64).
            05  DC-NAME-LEN         PIC 9(4) COMP-5.
@@ -59,6 +72,11 @@
            05  DC-PATH             PIC X(8192).
            05  DC-ITEM-COUNT       PIC 9(5) COMP-5.
            05  DC-ITEM-LIMIT       PIC 9(5) COMP-5.
+           05  DC-HEAD             PIC X(64).
+           05  DC-TLOG-PATH        PIC X(4096).
+           05  DC-TLOG-STATUS      PIC XX.
+           05  DC-LINES            OCCURS 100.
+               10  DC-LINE         PIC X(256).
            05  DC-ITEMS            OCCURS 1000.
                10  DC-ITEM         PIC X(1024).
                10  DC-ITEM-LEN     PIC 9(5) COMP-5.
@@ -68,22 +86,23 @@
        PROCEDURE DIVISION USING ORDERS-CONFIG.
        DC-MAIN.
            MOVE 0 TO DC-PROBLEMS
-           PERFORM DC-VAR-1
-           PERFORM DC-VAR-2
-           PERFORM DC-VAR-3
-           PERFORM DC-VAR-4
-           PERFORM DC-VAR-5
-           PERFORM DC-VAR-6
-           PERFORM DC-FILE-1
+           PERFORM DCV-CFG-PORT
+           PERFORM DCV-CFG-LOG-LEVEL
+           PERFORM DCV-CFG-DATABASE-URL
+           PERFORM DCV-CFG-ALLOWED-ORIGINS
+           PERFORM DCV-CFG-REQUEST-TIMEOUT
+           PERFORM DCV-CFG-WORKER-COUNT
+           PERFORM DCF-CFG-ORDERS-PATH
            IF DC-PROBLEMS = 0
                MOVE 0 TO RETURN-CODE
            ELSE
+               PERFORM DC-REPORT
                MOVE 1 TO RETURN-CODE
            END-IF
            GOBACK.
 
       *> PORT into CFG-PORT
-       DC-VAR-1.
+       DCV-CFG-PORT.
            MOVE "PORT" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -109,12 +128,22 @@
                                MOVE "out_of_range" TO DC-CODE
                                PERFORM DC-PROBLEM
                        END-COMPUTE
+                       IF DC-OK = "Y" AND DC-INT < 1
+                           MOVE "is below min 1" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
+                       IF DC-OK = "Y" AND DC-INT > 65535
+                           MOVE "is above max 65535" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
                    END-IF
                END-IF
            END-IF.
 
       *> LOG_LEVEL into CFG-LOG-LEVEL
-       DC-VAR-2.
+       DCV-CFG-LOG-LEVEL.
            MOVE "LOG_LEVEL" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -150,7 +179,7 @@
            END-IF.
 
       *> DATABASE_URL into CFG-DATABASE-URL
-       DC-VAR-3.
+       DCV-CFG-DATABASE-URL.
            MOVE "DATABASE_URL" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -176,7 +205,7 @@
            END-IF.
 
       *> ALLOWED_ORIGINS into CFG-ALLOWED-ORIGINS
-       DC-VAR-4.
+       DCV-CFG-ALLOWED-ORIGINS.
            MOVE "ALLOWED_ORIGINS" TO DC-NAME
            MOVE 8 TO DC-ITEM-LIMIT
            PERFORM DC-GET-ENV
@@ -197,9 +226,15 @@
                MOVE 1 TO DC-SEP-LEN
                PERFORM DC-SPLIT-CSV
                IF DC-OK = "Y"
+                   IF DC-ITEM-COUNT < 1
+                       MOVE "has too few items, below minItems 1"
+                         TO DC-MSG
+                       MOVE "too_few_items" TO DC-CODE
+                       PERFORM DC-PROBLEM
+                   END-IF
                    PERFORM VARYING DC-K FROM 1 BY 1
                            UNTIL DC-K > DC-ITEM-COUNT
-                       PERFORM DC-VAR-4-ITEM
+                       PERFORM DCI-CFG-ALLOWED-ORIGINS
                    END-PERFORM
                ELSE
                    MOVE 0 TO DC-ITEM-COUNT
@@ -207,7 +242,7 @@
            END-IF
            MOVE DC-ITEM-COUNT TO CFG-ORIGIN-COUNT.
 
-       DC-VAR-4-ITEM.
+       DCI-CFG-ALLOWED-ORIGINS.
            PERFORM DC-ITEM-TO-RAW
            IF DC-LEN > 64
                MOVE "does not fit in CFG-ALLOWED-ORIGINS (PIC X(64))"
@@ -223,7 +258,7 @@
            .
 
       *> REQUEST_TIMEOUT into CFG-REQUEST-TIMEOUT
-       DC-VAR-5.
+       DCV-CFG-REQUEST-TIMEOUT.
            MOVE "REQUEST_TIMEOUT" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -261,12 +296,22 @@
                            MOVE "out_of_range" TO DC-CODE
                            PERFORM DC-PROBLEM
                        END-IF
+                       IF DC-OK = "Y" AND DC-NS < 1000000000
+                           MOVE "is below min 1s" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
+                       IF DC-OK = "Y" AND DC-NS > 300000000000
+                           MOVE "is above max 5m" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
                    END-IF
                END-IF
            END-IF.
 
       *> WORKER_COUNT into CFG-WORKER-COUNT
-       DC-VAR-6.
+       DCV-CFG-WORKER-COUNT.
            MOVE "WORKER_COUNT" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-LEN = 0
@@ -293,12 +338,22 @@
                                MOVE "out_of_range" TO DC-CODE
                                PERFORM DC-PROBLEM
                        END-COMPUTE
+                       IF DC-OK = "Y" AND DC-INT < 1
+                           MOVE "is below min 1" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
+                       IF DC-OK = "Y" AND DC-INT > 64
+                           MOVE "is above max 64" TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       END-IF
                    END-IF
                END-IF
            END-IF.
 
       *> file input orders: its path into CFG-ORDERS-PATH
-       DC-FILE-1.
+       DCF-CFG-ORDERS-PATH.
            MOVE "ORDERS_FILE" TO DC-NAME
            PERFORM DC-GET-ENV
            IF DC-SET = "N" OR DC-LEN = 0
@@ -321,22 +376,80 @@
            END-IF.
 
       *> docuconf runtime: paragraphs for a generated loader.
-      *> docuconf-cobol generate inlines it into every loader. Each
+      *> docuconf-cobol generate inlines it into every loader, or the
+      *> loader COPYs it (-runtime copy). The loader declares the
+      *> termination log file DC-TLOG, with record DC-TLOG-LINE. Each
       *> paragraph works on DC-WORK (DCRTWS.cpy): DC-NAME is the
       *> variable being read, DC-RAW(1:DC-LEN) its value, and a
       *> problem is reported through DC-PROBLEM, which never prints
       *> the value.
       *> Valid in fixed and free format.
 
-      *> Prints DC-NAME, DC-MSG and DC-CODE on stderr and counts it.
+      *> Records a problem: DC-NAME, DC-MSG and DC-CODE. DC-REPORT
+      *> prints them all at the end.
        DC-PROBLEM.
            ADD 1 TO DC-PROBLEMS
            MOVE "N" TO DC-OK
-           DISPLAY "docuconf: " DC-NAME(1:DC-NAME-LEN) ": "
-               FUNCTION TRIM(DC-MSG TRAILING) " ("
-               FUNCTION TRIM(DC-CODE TRAILING) ")"
-               UPON SYSERR
-           END-DISPLAY.
+           IF DC-PROBLEMS <= 100
+               MOVE SPACES TO DC-LINE(DC-PROBLEMS)
+               STRING "  " DC-NAME(1:DC-NAME-LEN) ": "
+                   FUNCTION TRIM(DC-MSG TRAILING) " ("
+                   FUNCTION TRIM(DC-CODE TRAILING) ")"
+                   DELIMITED BY SIZE INTO DC-LINE(DC-PROBLEMS)
+               END-STRING
+           END-IF.
+
+      *> Prints every problem on stderr, under one header, as every
+      *> docuconf SDK does, and writes the same lines to the
+      *> termination log: DOCUCONF_TERMINATION_LOG ("-" for none), else
+      *> /dev/termination-log when it exists.
+       DC-REPORT.
+           MOVE SPACES TO DC-HEAD
+           IF DC-PROBLEMS = 1
+               MOVE "docuconf: 1 configuration problem:" TO DC-HEAD
+           ELSE
+               MOVE DC-PROBLEMS TO DC-IDX-ED
+               STRING "docuconf: " FUNCTION TRIM(DC-IDX-ED)
+                   " configuration problems:"
+                   DELIMITED BY SIZE INTO DC-HEAD
+               END-STRING
+           END-IF
+           DISPLAY FUNCTION TRIM(DC-HEAD TRAILING) UPON SYSERR
+           END-DISPLAY
+           PERFORM VARYING DC-K FROM 1 BY 1
+                   UNTIL DC-K > DC-PROBLEMS OR DC-K > 100
+               DISPLAY FUNCTION TRIM(DC-LINE(DC-K) TRAILING)
+                   UPON SYSERR
+               END-DISPLAY
+           END-PERFORM
+           MOVE SPACES TO DC-TLOG-PATH
+           ACCEPT DC-TLOG-PATH
+               FROM ENVIRONMENT "DOCUCONF_TERMINATION_LOG"
+               ON EXCEPTION
+                   MOVE SPACES TO DC-TLOG-PATH
+           END-ACCEPT
+           IF DC-TLOG-PATH = SPACES
+               MOVE "/dev/termination-log" TO DC-TLOG-PATH
+               OPEN INPUT DC-TLOG
+               IF DC-TLOG-STATUS = "00"
+                   CLOSE DC-TLOG
+               ELSE
+                   MOVE "-" TO DC-TLOG-PATH
+               END-IF
+           END-IF
+           IF DC-TLOG-PATH NOT = "-"
+               OPEN OUTPUT DC-TLOG
+               IF DC-TLOG-STATUS = "00"
+                   MOVE DC-HEAD TO DC-TLOG-LINE
+                   WRITE DC-TLOG-LINE END-WRITE
+                   PERFORM VARYING DC-K FROM 1 BY 1
+                           UNTIL DC-K > DC-PROBLEMS OR DC-K > 100
+                       MOVE DC-LINE(DC-K) TO DC-TLOG-LINE
+                       WRITE DC-TLOG-LINE END-WRITE
+                   END-PERFORM
+                   CLOSE DC-TLOG
+               END-IF
+           END-IF.
 
        DC-BAD-TYPE.
            MOVE "invalid_type" TO DC-CODE
