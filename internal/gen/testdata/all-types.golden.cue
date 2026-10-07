@@ -23,12 +23,13 @@ contract.#Contract & {
 			maxLength:   64
 		}
 		BROKERS: {
-			type:        "list"
-			description: "Brokers to connect to"
-			encoding:    "indexed"
-			items:       "string"
-			minItems:    1
-			maxItems:    4
+			type:          "list"
+			description:   "Brokers to connect to"
+			encoding:      "indexed"
+			items:         "string"
+			minItems:      1
+			maxItems:      4
+			itemMaxLength: 40
 		}
 		LOG_LEVEL: {
 			type:        "enum"
@@ -62,6 +63,7 @@ contract.#Contract & {
 			default: {
 				perMinute: 60
 			}
+			maxLength: 200
 			schema: {
 				additionalProperties: false
 				properties: {
@@ -133,15 +135,18 @@ contract.#Contract & {
 			type:        "list"
 			description: "Tags added to every record"
 			default: ["a", "b"]
-			encoding:  "csv"
-			items:     "string"
-			separator: ";"
-			maxItems:  5
+			encoding:      "csv"
+			items:         "string"
+			separator:     ";"
+			maxItems:      5
+			itemMinLength: 1
+			itemMaxLength: 10
 		}
 		UPSTREAM: {
 			type:        "url"
 			description: "Upstream base URL"
 			default:     "https://api.example.com"
+			maxLength:   80
 			schemes: ["https"]
 		}
 		VERBOSE: {

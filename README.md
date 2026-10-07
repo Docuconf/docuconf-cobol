@@ -71,13 +71,14 @@ Annotations are comment lines (`*>` in column 7) directly above an item, so the 
 | duration | `@unit ns\|us\|ms\|s\|m\|h` | what the numeric field counts in; required. `PIC 9(4)V999` with `@unit s` keeps milliseconds |
 | | `@min`, `@max` | Go durations (`1s`, `5m`) |
 | | `@encoding go\|iso8601\|seconds\|timespan` | the wire form (default `go`) |
-| url | `@schemes <s>...` | |
+| url | `@schemes <s>...`, `@max-length` | `maxLength` defaults to the PIC X size |
 | enum | level-88 `VALUE "x"` items, or `@values <v>...` | |
 | bool | `PIC X` (Y/N) or `PIC 9` (1/0), with `@type bool` | |
-| json | `@schema <file.json>` | the variable's raw JSON text goes into the `PIC X` field; `docuconf exec` checks it against the schema |
+| json | `@schema <file.json>`, `@max-length` | the variable's raw JSON text goes into the `PIC X` field; `docuconf exec` checks it against the schema, and its length as received against `maxLength`, which defaults to the PIC X size |
 | list (`OCCURS`) | `@count <FIELD>`, or `OCCURS 1 TO n DEPENDING ON <FIELD>` | the field that receives the number of items |
 | | `@min-items`, `@max-items` | `maxItems` defaults to the `OCCURS` size; `OCCURS a TO b` sets both |
 | | `@item-min`, `@item-max` | for int items |
+| | `@item-min-length`, `@item-max-length` | for string items; `itemMaxLength` defaults to the PIC X size of one entry |
 | | `@encoding csv\|json\|indexed`, `@separator "<s>"` | the wire form (default csv, `,`) |
 | file input (a `PIC X` field that receives its path) | `@file <name> [<type>]` | type `text` (default), `binary`, `config`, `caBundle`, `tls` or `keystore` |
 | | `@path </abs/path>`, `@path-env <NAME>` | where the platform mounts it; the loader puts the effective path in the field, with `DOCUCONF_FILE_ROOT` in front when set |
@@ -97,7 +98,7 @@ orders-config.cpy:1: comment runs past column 72, where cobc stops reading; cont
 ### Limits
 
 - A COBOL field is padded with spaces, so a value's trailing spaces are lost. Leading spaces and other trailing characters (a newline) are kept.
-- `PIC X(n)` holds n bytes, and the contract's `maxLength` counts characters, so a value with multi-byte UTF-8 characters can pass `docuconf exec` and still not fit; the loader reports it as `out_of_range`. URL, enum, json and list items have no length in the contract; the loader checks them the same way.
+- `PIC X(n)` holds n bytes, and the contract's `maxLength` and `itemMaxLength` count characters (Unicode code points), so a value with multi-byte UTF-8 characters can pass `docuconf exec` and still not fit: `ZÜ01` is 4 characters but 5 bytes. The loader reports it as `out_of_range`. To have the platform reject such values before deploying, declare a smaller `@max-length` (or `@item-max-length`) that leaves room for them, or restrict the value to ASCII with `@pattern "^[ -~]*$"`. Strings, URLs and json values get a `maxLength`, and string list items an `itemMaxLength`, from their PIC X size; an enum's values are checked against the field when the copybook is generated.
 - The loader reads values of up to 8191 bytes and list items of up to 1024 bytes, and lists of up to 1000 items.
 - A json variable is passed through as text; GnuCOBOL 3 has no JSON PARSE.
 - `OCCURS DEPENDING ON` must be on the record's last item, as cobc requires; otherwise use `OCCURS n` with `@count`.
@@ -138,6 +139,6 @@ Without them the suite skips, unless `DOCUCONF_REQUIRE_CONFORMANCE=1`. `DOCUCONF
 
 ## Development
 
-`docuconf-cobol` imports `github.com/docuconf/docuconf-go` for `ContractCUE` (which checks a contract as the SDKs do and writes it in the standard layout) and its contract-first checks. Until those are in a docuconf-go release, `go.mod` pins the docuconf-go commit that adds them, by pseudo-version; no `replace` directive is used.
+`docuconf-cobol` imports `github.com/docuconf/docuconf-go` for `ContractCUE` (which checks a contract as the SDKs do and writes it in the standard layout) and its contract-first checks. Until those are in a docuconf-go release, `go.mod` pins a docuconf-go commit that has them (currently the one that adds `maxLength` on url and json values and item lengths on string lists), by pseudo-version; no `replace` directive is used.
 
 The runtime the loader is built on is in [`copybooks/`](copybooks): `DCRTWS.cpy` (working storage) and `DCRTPD.cpy` (paragraphs: reading variables, parsing ints, floats, bools, durations, csv and JSON lists, applying `DOCUCONF_FILE_ROOT`). The generator inlines both into each loader.
