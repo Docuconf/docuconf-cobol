@@ -5,7 +5,7 @@
 # the length limits) until a release includes it; then use @latest or a
 # version tag.
 FROM golang:1.25 AS docuconf
-ARG DOCUCONF_VERSION=v0.0.0-20261007222214-d41cac4db442
+ARG DOCUCONF_VERSION=v0.0.0-20261007225926-e9554f671c32
 RUN CGO_ENABLED=0 go install github.com/docuconf/docuconf-go/cmd/docuconf@${DOCUCONF_VERSION}
 
 # The COBOL program and its generated loader, compiled with GnuCOBOL.
