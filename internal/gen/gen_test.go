@@ -95,6 +95,41 @@ func TestFreeFormat(t *testing.T) {
 	}
 }
 
+// TestLengthLimits checks the lengths a PIC X field gives url and json
+// variables and string list items, and the contract's code point counts.
+func TestLengthLimits(t *testing.T) {
+	src := "      *> @service demo  @prefix CFG-\n       01  DEMO-CONFIG.\n" +
+		"      *> Callback endpoint\n      *> @type url\n           05  CFG-CALLBACK PIC X(24).\n" +
+		"      *> Run limits\n      *> @type json  @max-length 16\n           05  CFG-LIMITS PIC X(64).\n" +
+		"      *> Branch codes\n      *> @item-min-length 2  @count CFG-N  @default ZÜ01 BE\n" +
+		"           05  CFG-BRANCHES PIC X(6) OCCURS 4.\n           05  CFG-N PIC 9.\n"
+	c, err := Build("demo.cpy", src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cue, err := c.ContractCUE()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"CALLBACK: {\n\t\t\ttype:        \"url\"",
+		"maxLength:   24",
+		"maxLength:   16",
+		"itemMinLength: 2",
+		"itemMaxLength: 6",
+	} {
+		if !strings.Contains(string(cue), want) {
+			t.Errorf("contract lacks %q:\n%s", want, cue)
+		}
+	}
+	// ZÜ01 is 4 characters, within the contract's itemMaxLength of 4, but
+	// 5 bytes, more than PIC X(4) holds: the generator checks the bytes.
+	_, err = Build("demo.cpy", strings.Replace(src, "PIC X(6) OCCURS", "PIC X(4) OCCURS", 1), Options{})
+	if err == nil || !strings.Contains(err.Error(), `item "ZÜ01" is longer than PIC X(4) holds`) {
+		t.Errorf("ZÜ01 in PIC X(4): %v", err)
+	}
+}
+
 // TestCueVet checks the generated contracts against the meta-schema,
 // with cue vet -c, as the platform will.
 func TestCueVet(t *testing.T) {
@@ -182,6 +217,20 @@ func TestProblems(t *testing.T) {
 			"1500ms is not a whole number of s"},
 		{"file without path", "      *> Orders to read\n      *> @file orders\n           05  CFG-ORDERS PIC X(100).\n",
 			"a file input needs @path"},
+		{"item lengths on ints", "      *> Shards to own\n      *> @item-max-length 3  @count CFG-N\n           05  CFG-SHARDS PIC 9(4) OCCURS 4.\n           05  CFG-N PIC 9.\n",
+			"@item-max-length does not apply to a list variable"},
+		{"item max length beyond PIC", "      *> Branch codes\n      *> @item-max-length 5  @count CFG-N\n           05  CFG-BRANCHES PIC X(4) OCCURS 4.\n           05  CFG-N PIC 9.\n",
+			"@item-max-length 5 is more than PIC X(4) holds"},
+		{"item min length above max", "      *> Branch codes\n      *> @item-min-length 3  @item-max-length 2\n      *> @count CFG-N\n           05  CFG-BRANCHES PIC X(4) OCCURS 4.\n           05  CFG-N PIC 9.\n",
+			"@item-min-length 3 is above the item maximum length 2"},
+		{"string tags on a list", "      *> Branch codes\n      *> @max-length 2  @count CFG-N\n           05  CFG-BRANCHES PIC X(4) OCCURS 4.\n           05  CFG-N PIC 9.\n",
+			"@max-length does not apply to a list variable"},
+		{"url max length beyond PIC", "      *> Callback endpoint\n      *> @type url  @max-length 50\n           05  CFG-CALLBACK PIC X(40).\n",
+			"@max-length 50 is more than PIC X(40) holds"},
+		{"item default too long", "      *> Branch codes\n      *> @item-max-length 2  @count CFG-N  @default BE GENEVA\n           05  CFG-BRANCHES PIC X(8) OCCURS 4.\n           05  CFG-N PIC 9.\n",
+			"itemMaxLength 2"},
+		{"json default too long", "      *> Run limits\n      *> @type json  @max-length 8\n      *> @default \"{\"\"n\"\": \"\"abcdef\"\"}\"\n           05  CFG-LIMITS PIC X(64).\n",
+			"maxLength 8"},
 		{"duplicate variable", "      *> Port to listen on\n           05  CFG-PORT PIC 9(5).\n      *> Port again here\n      *> @env PORT\n           05  CFG-PORT2 PIC 9(5).\n",
 			"variable PORT is also read by the field at line 4"},
 	} {
