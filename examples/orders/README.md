@@ -19,8 +19,6 @@ These are the six variables every docuconf SDK's orders example uses. A batch jo
 The record is ordinary COBOL. The comment lines above each field give its description, and `@` tags add what the PIC clause cannot say:
 
 ```cobol
-      *> Configuration of the ORDERS-BATCH job, read from the
-      *> environment by the generated loader ORDCFG.
       *> @service orders-batch  @prefix CFG-  @program ORDCFG
        01  ORDERS-CONFIG.
       *> Port of the Prometheus metrics endpoint
@@ -30,7 +28,9 @@ The record is ordinary COBOL. The comment lines above each field give its descri
       *> @default info
            05  CFG-LOG-LEVEL           PIC X(5).
                88  LOG-DEBUG           VALUE "debug".
-               ...
+               88  LOG-INFO            VALUE "info".
+               88  LOG-WARN            VALUE "warn".
+               88  LOG-ERROR           VALUE "error".
 ```
 
 `CFG-PORT` becomes `PORT`: the `@prefix` is dropped and hyphens become underscores. `PIC 9(5)` makes it an int that cannot be negative or above 99999; `@max 65535` narrows that. The level-88 values make `LOG_LEVEL` an enum. See the [annotation reference](../../README.md#annotations) for every tag.
@@ -38,12 +38,12 @@ The record is ordinary COBOL. The comment lines above each field give its descri
 ## 2. Generate the contract and the loader
 
 ```sh
-docuconf-cobol generate examples/orders/orders-config.cpy
+docuconf-cobol generate orders-config.cpy
 ```
 
-```
-wrote examples/orders/contract.cue
-wrote examples/orders/ORDCFG.cbl
+```text
+wrote contract.cue
+wrote ORDCFG.cbl
 ```
 
 Commit both. CI runs `docuconf-cobol generate -check`, which fails when they no longer match the copybook.
@@ -53,19 +53,21 @@ Commit both. CI runs `docuconf-cobol generate -check`, which fails when they no 
 ```cobol
        WORKING-STORAGE SECTION.
        COPY "orders-config.cpy".
-       PROCEDURE DIVISION.
+```
+
+```cobol
+       MAIN.
            CALL "ORDCFG" USING ORDERS-CONFIG
            IF RETURN-CODE NOT = 0
-               STOP RUN RETURNING 1
+               STOP RUN
            END-IF
 ```
 
-The loader reads each variable with `ACCEPT ... FROM ENVIRONMENT`, applies the defaults, converts the values (`NUMVAL` for numbers, the csv list into the `OCCURS` table and its count, `30s` into `30000` milliseconds) and puts the orders file's path into `CFG-ORDERS-PATH`, which [`ORDERS-BATCH.cbl`](ORDERS-BATCH.cbl) uses in `SELECT ORDERS-FILE ASSIGN TO CFG-ORDERS-PATH`.
+The loader reads each variable with `ACCEPT ... FROM ENVIRONMENT`, applies the defaults, converts the values (`NUMVAL` for numbers, the csv list into the `OCCURS` table and its count, `30s` into `30000` milliseconds), checks the ranges, and puts the orders file's path into `CFG-ORDERS-PATH`, which [`ORDERS-BATCH.cbl`](ORDERS-BATCH.cbl) uses in `SELECT ORDERS-FILE ASSIGN TO CFG-ORDERS-PATH`. On a problem it prints them all and sets `RETURN-CODE` to 1, and `STOP RUN` ends the job with that code.
 
 ## 4. Build with cobc
 
 ```sh
-cd examples/orders
 cobc -x -o orders-batch ORDERS-BATCH.cbl ORDCFG.cbl
 ```
 
@@ -73,10 +75,10 @@ cobc -x -o orders-batch ORDERS-BATCH.cbl ORDCFG.cbl
 
 ```sh
 DATABASE_URL=postgres://orders:s3cret@db:5432/orders ORDERS_FILE=orders.txt \
-  docuconf exec --contract contract.cue -- ./orders-batch
+  docuconf exec -contract contract.cue -- ./orders-batch
 ```
 
-```
+```text
 orders-batch configuration:
   PORT            8080 (metrics, not opened by this job)
   LOG_LEVEL       info
@@ -93,59 +95,41 @@ summary:
 
 With `PORT=0` and no `DATABASE_URL`, `docuconf exec` stops before the job starts and exits 1:
 
+```sh
+PORT=0 ORDERS_FILE=orders.txt docuconf exec -contract contract.cue -- ./orders-batch
 ```
-$ PORT=0 ORDERS_FILE=orders.txt docuconf exec --contract contract.cue -- ./orders-batch
-docuconf: orders-batch: 2 configuration problems:
+
+```text
+docuconf: 2 configuration problems:
   DATABASE_URL: is required but not set (missing_required)
   PORT: 0 is below min 1 (out_of_range)
 ```
 
-The same lines go to the termination log, so `kubectl describe pod` shows them. Run the job without `docuconf exec` and only the loader's own checks apply: it reports the missing `DATABASE_URL`, but it does not check ranges, so `PORT=0` would get through. That is why the image's entrypoint is `docuconf exec`.
+The same lines go to the termination log, so `kubectl describe pod` shows them. Run the job without `docuconf exec` and the loader still refuses `PORT=0` (it checks `@min` and `@max`); what it leaves to `docuconf exec` is the URL scheme of `DATABASE_URL` and the orders file itself.
 
-`docuconf check --contract contract.cue` runs the same checks without starting anything, for an init container or CI.
+For a local run, keep the variables in a `.env` file: `docuconf exec -env-file .env` checks its values and passes them to the job (a variable already set in the environment wins). `docuconf check -contract contract.cue` runs the same checks without starting anything, for an init container or CI.
 
-[`smoke.sh`](smoke.sh) runs both cases (and, where Docker is available, builds the image and runs them in a container):
+[`smoke.sh`](smoke.sh) runs these cases (and, where Docker is available, builds the image and runs them in a container), and [`test-config.sh`](test-config.sh) tests the configuration with [`CFGTEST.cbl`](CFGTEST.cbl):
 
+<!-- not executed: CI runs them -->
 ```sh
 DOCUCONF=/path/to/docuconf examples/orders/smoke.sh
+DOCUCONF=/path/to/docuconf examples/orders/test-config.sh
 ```
 
-## 6. Export and deploy
+## 6. Deploy
 
-`contract.cue` is the export: the platform team validates its values against it with `docuconf vet` and renders the pod's environment with `docuconf render`, or uses the [Helm library chart](https://github.com/docuconf/docuconf-go/tree/main/helm) in docuconf-go. The [`Dockerfile`](Dockerfile) builds the job with GnuCOBOL and copies in the `docuconf` CLI and the contract, with `docuconf exec` as the entrypoint. A CronJob runs it nightly:
+`contract.cue` is the export: the platform team checks its values with `docuconf vet` and renders the pod's environment and volumes with `docuconf render`, from [`k8s/values.yaml`](k8s/values.yaml) and [`k8s/files.yaml`](k8s/files.yaml), which says the orders file is the key `orders.txt` of the ConfigMap `orders-input`:
 
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: orders-batch
-spec:
-  schedule: "15 2 * * *"
-  concurrencyPolicy: Forbid
-  jobTemplate:
-    spec:
-      backoffLimit: 0
-      template:
-        spec:
-          restartPolicy: Never
-          containers:
-            - name: orders-batch
-              image: registry.example.com/orders-batch:1.0.0
-              terminationMessagePolicy: FallbackToLogsOnError
-              env:
-                - name: DATABASE_URL
-                  valueFrom:
-                    secretKeyRef: {name: orders-db, key: url}
-                - name: ALLOWED_ORIGINS
-                  value: https://shop.example.com,http://localhost:3000
-              volumeMounts:
-                - name: orders
-                  mountPath: /data
-                  readOnly: true
-          volumes:
-            - name: orders
-              configMap:
-                name: orders-input
+```sh
+docuconf vet -contract contract.cue -values k8s/values.yaml -files k8s/files.yaml
+docuconf render -contract contract.cue -values k8s/values.yaml -files k8s/files.yaml
 ```
 
-`docuconf render` writes the `env`, `volumes` and `volumeMounts` from the platform's values, so the contract and the pod spec cannot drift apart.
+The output ([`k8s/rendered.yaml`](k8s/rendered.yaml)) is the `env`, `volumes` and `volumeMounts` of [`k8s/cronjob.yaml`](k8s/cronjob.yaml), so the pod spec cannot drift from the contract. The [`Dockerfile`](Dockerfile) builds the job with GnuCOBOL, copies in the `docuconf` CLI and the contract, and starts the job through `docuconf exec`:
+
+```dockerfile
+ENTRYPOINT ["docuconf", "exec", "-contract", "/etc/docuconf/contract.cue", "--", "/app/orders-batch"]
+```
+
+The image holds no input: the platform mounts it. A ConfigMap holds at most 1 MiB, and batch input usually lives on a PersistentVolumeClaim; [`k8s/cronjob-pvc.yaml`](k8s/cronjob-pvc.yaml) mounts one and sets `ORDERS_FILE`. The contract has no PVC file source yet, so that volume is written by hand; `docuconf exec` still checks the file before the job starts.

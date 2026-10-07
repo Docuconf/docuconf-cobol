@@ -1,10 +1,12 @@
 # ORDERS-BATCH, checked at boot by docuconf exec.
 # Build from this directory: docker build -t orders-batch .
 
-# The docuconf CLI. Pinned to the docuconf-go commit that adds exec until
-# a release includes it; then use @latest or a version tag.
+# The docuconf CLI, built from source: docuconf-go publishes no release
+# binary or image yet. Pinned to the commit whose exec passes -env-file
+# values and contract defaults to the program; when a release exists,
+# copy its binary instead and drop this stage.
 FROM golang:1.25 AS docuconf
-ARG DOCUCONF_VERSION=v0.0.0-20261007130834-b81352e0c543
+ARG DOCUCONF_VERSION=v0.0.0-20261007140246-bf1804919533
 RUN CGO_ENABLED=0 go install github.com/docuconf/docuconf-go/cmd/docuconf@${DOCUCONF_VERSION}
 
 # The COBOL program and its generated loader, compiled with GnuCOBOL.
@@ -16,6 +18,9 @@ WORKDIR /src
 COPY orders-config.cpy ORDCFG.cbl ORDERS-BATCH.cbl ./
 RUN mkdir /out && cobc -x -o /out/orders-batch ORDERS-BATCH.cbl ORDCFG.cbl
 
+# libcob4 is the GnuCOBOL 3.1.2 runtime in Debian bookworm (3.1.2-5).
+# Debian renamed it libcob4t64 in 3.1.2-5.1, after bookworm, and Ubuntu
+# 24.04 ships that name: change it if you change the base image.
 FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libcob4 \
@@ -23,7 +28,7 @@ RUN apt-get update \
 COPY --from=docuconf /go/bin/docuconf /usr/local/bin/docuconf
 COPY --from=build /out/orders-batch /app/orders-batch
 COPY contract.cue /etc/docuconf/contract.cue
-# A sample input; in the cluster the platform mounts the real file here.
-COPY orders.txt /data/orders.txt
+# No input is baked in: the platform mounts the orders file at
+# /data/orders.txt (or sets ORDERS_FILE).
 USER 65532:65532
-ENTRYPOINT ["docuconf", "exec", "--contract", "/etc/docuconf/contract.cue", "--", "/app/orders-batch"]
+ENTRYPOINT ["docuconf", "exec", "-contract", "/etc/docuconf/contract.cue", "--", "/app/orders-batch"]
