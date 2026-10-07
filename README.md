@@ -110,7 +110,7 @@ go install github.com/docuconf/docuconf-cobol/cmd/docuconf-cobol@latest
 go install github.com/docuconf/docuconf-go/cmd/docuconf@latest     # for docuconf exec
 ```
 
-Release binaries with checksums are on the GitHub releases page. The loader needs GnuCOBOL 3 (`apt-get install gnucobol3`); it uses only standard COBOL plus `ACCEPT ... FROM ENVIRONMENT`, `FUNCTION TRIM` and `NUMVAL-F`.
+Release binaries with checksums (`SHA256SUMS`) are on the GitHub releases page, and the generator is also an image, `ghcr.io/docuconf/docuconf-cobol` (linux/amd64, arm64 and s390x), holding one static binary at `/docuconf-cobol`: `COPY --from=ghcr.io/docuconf/docuconf-cobol:<version> /docuconf-cobol /usr/local/bin/docuconf-cobol`. The loader needs GnuCOBOL 3 (`apt-get install gnucobol3`); it uses only standard COBOL plus `ACCEPT ... FROM ENVIRONMENT`, `FUNCTION TRIM` and `NUMVAL-F`.
 
 ```
 docuconf-cobol generate [-free] [-name svc] [-program PGM] [-package pkg] [-prefix CFG-] [-o dir] [-check] <copybook>

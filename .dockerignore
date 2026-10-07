@@ -1,0 +1,10 @@
+# The image needs the Go sources only.
+.git
+.github
+dist
+examples
+tests
+**/testdata
+**/*_test.go
+Dockerfile
+.dockerignore
