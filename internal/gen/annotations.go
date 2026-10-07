@@ -2,6 +2,7 @@ package gen
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/docuconf/docuconf-cobol/internal/copybook"
@@ -35,8 +36,17 @@ func parseDoc(comments []copybook.Comment) (doc, error) {
 			continue
 		}
 		if !strings.HasPrefix(t, "@") {
-			d.text = append(d.text, t)
-			continue
+			// Tags may follow text on the same line, as in an inline
+			// comment: "*> port number @default 80".
+			at := tagStart(t)
+			if at < 0 {
+				d.text = append(d.text, t)
+				continue
+			}
+			if desc := strings.TrimSpace(t[:at]); desc != "" {
+				d.text = append(d.text, desc)
+			}
+			t = t[at:]
 		}
 		words, err := splitWords(t)
 		if err != nil {
@@ -56,6 +66,83 @@ func parseDoc(comments []copybook.Comment) (doc, error) {
 	}
 	return d, nil
 }
+
+// tagStart is the offset of the first word in s, outside double quotes,
+// that is a known tag (@ followed by a tag name), or -1. A word such as
+// @home or ops@example.com in a description is not a tag.
+func tagStart(s string) int {
+	quoted := false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '"':
+			quoted = !quoted
+		case !quoted && s[i] == '@' && (i == 0 || s[i-1] == ' '):
+			j := i + 1
+			for j < len(s) && s[j] != ' ' {
+				j++
+			}
+			if slices.Contains(allTags, normTag(s[i+1:j])) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// suggest returns " (did you mean @x?)" when name is within two edits of
+// a tag in known, else "".
+func suggest(name string, known []string) string {
+	best, bestD := "", 3
+	for _, k := range known {
+		if d := editDistance(name, k); d < bestD {
+			best, bestD = k, d
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return fmt.Sprintf("; did you mean @%s?", tagSpelling[best])
+}
+
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
+}
+
+// recordTags are the tags of the level-01 record.
+var recordTags = []string{"service", "program", "package", "prefix"}
+
+// allTags lists every tag, by normalised name.
+var allTags = slices.Concat(recordTags, knownVarTags, knownFileTags, []string{"ignore"})
+
+// tagSpelling is how the README spells each tag, for suggestions.
+var tagSpelling = func() map[string]string {
+	m := map[string]string{}
+	for _, t := range []string{"service", "program", "package", "prefix", "env", "desc", "type", "secret",
+		"required", "default", "min", "max", "min-length", "max-length", "pattern", "schemes", "values",
+		"min-items", "max-items", "item-min", "item-max", "encoding", "separator", "unit", "count", "present",
+		"examples", "deprecated", "group", "schema", "config-key", "ignore", "file", "path", "path-env",
+		"reload", "max-size", "format", "dns-names", "key-algorithms", "min-remaining", "require-ca",
+		"min-certificates", "password-var"} {
+		m[normTag(t)] = t
+	}
+	return m
+}()
 
 type word struct {
 	text   string

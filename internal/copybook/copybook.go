@@ -31,10 +31,21 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("%s:%d: %s", e.File, e.Line, e.Msg) }
 
+// Warning is something in the copybook that is probably a mistake but
+// does not stop generation.
+type Warning struct {
+	File string
+	Line int
+	Msg  string
+}
+
+func (w Warning) String() string { return fmt.Sprintf("%s:%d: warning: %s", w.File, w.Line, w.Msg) }
+
 // Comment is one comment line, without its *> or * indicator.
 type Comment struct {
-	Line int
-	Text string
+	Line   int
+	Text   string
+	Inline bool // a *> comment after code on the entry's line
 }
 
 // Entry is one data description entry.
@@ -52,13 +63,18 @@ type Entry struct {
 	Children []*Entry
 	Parent   *Entry
 	Redefine string
+	// Synthetic marks the level-01 record that Parse makes up for a
+	// copybook whose items have no level-01 above them (a program writes
+	// "01 WS-CFG. COPY CFGFLDS."). Its Name is empty.
+	Synthetic bool
 }
 
 // Literal is a VALUE literal.
 type Literal struct {
-	Text    string // the value: string contents, or the number as written
-	Numeric bool
-	Thru    *Literal
+	Text       string // the value: string contents, or the number as written
+	Numeric    bool
+	Figurative bool // SPACES, ZEROS, LOW-VALUES or HIGH-VALUES
+	Thru       *Literal
 }
 
 // IsGroup reports whether the entry is a group item.
@@ -91,11 +107,15 @@ type line struct {
 }
 
 // Parse reads the entries of a copybook. It returns the top-level
-// entries (level 01 and 77), with their subordinates as children.
-func Parse(file, src string, format Format) ([]*Entry, error) {
-	lines, err := splitLines(file, src, format)
+// entries (level 01 and 77), with their subordinates as children. Items
+// that come before any level-01 entry are gathered under a Synthetic
+// record. In fixed format, columns 73-80 (the identification area) are
+// ignored, as cobc ignores them; an annotation that looks cut at column
+// 72 is reported as a warning.
+func Parse(file, src string, format Format) ([]*Entry, []Warning, error) {
+	lines, warns, err := splitLines(file, src, format)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var toks []token
 	var pending []Comment // comments since the last entry ended
@@ -113,7 +133,7 @@ func Parse(file, src string, format Format) ([]*Entry, error) {
 		}
 		lt, err := tokenize(file, l)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, t := range lt {
 			if expectStart && !t.period {
@@ -134,7 +154,7 @@ func Parse(file, src string, format Format) ([]*Entry, error) {
 				i--
 			}
 			if i >= 0 {
-				docs[i] = append(docs[i], Comment{Line: l.n, Text: l.inline})
+				docs[i] = append(docs[i], Comment{Line: l.n, Text: l.inline, Inline: true})
 			}
 		}
 	}
@@ -146,21 +166,23 @@ func Parse(file, src string, format Format) ([]*Entry, error) {
 			j++
 		}
 		if j == len(toks) {
-			return nil, &Error{file, toks[i].line, "entry does not end with a period"}
+			return nil, nil, &Error{file, toks[i].line, "entry does not end with a period"}
 		}
 		e, err := parseEntry(file, toks[i:j])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		e.Doc = docs[i]
 		entries = append(entries, e)
 		i = j + 1
 	}
-	return nest(file, entries)
+	roots, err := nest(file, entries)
+	return roots, warns, err
 }
 
-func splitLines(file, src string, format Format) ([]line, error) {
+func splitLines(file, src string, format Format) ([]line, []Warning, error) {
 	var out []line
+	var warns []Warning
 	for i, raw := range strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n") {
 		n := i + 1
 		raw = strings.ReplaceAll(raw, "\t", "    ")
@@ -173,9 +195,11 @@ func splitLines(file, src string, format Format) ([]line, error) {
 			ind := raw[6]
 			end := len(raw)
 			if end > 72 {
+				// Columns 73-80 are the identification area (a member
+				// name or sequence number), which cobc ignores.
 				if ind == '*' || ind == '/' {
-					if strings.TrimSpace(raw[72:]) != "" {
-						return nil, &Error{file, n, "comment runs past column 72, where cobc stops reading; continue it on the next *> line"}
+					if w := cutAnnotation(raw); w != "" {
+						warns = append(warns, Warning{file, n, w})
 					}
 				}
 				end = 72
@@ -184,23 +208,23 @@ func splitLines(file, src string, format Format) ([]line, error) {
 			case '*', '/':
 				t := raw[7:end]
 				t = strings.TrimPrefix(t, ">")
-				out = append(out, line{n: n, comment: &Comment{n, strings.TrimSpace(t)}})
+				out = append(out, line{n: n, comment: &Comment{Line: n, Text: strings.TrimSpace(t)}})
 				continue
 			case 'D', 'd':
 				out = append(out, line{n: n, blank: true})
 				continue
 			case '-':
-				return nil, &Error{file, n, "continuation lines are not supported in a docuconf copybook"}
+				return nil, nil, &Error{file, n, "continuation lines are not supported in a docuconf copybook"}
 			case ' ':
 			default:
-				return nil, &Error{file, n, fmt.Sprintf("column 7 holds %q; is this a free-format copybook? (use -free)", ind)}
+				return nil, nil, &Error{file, n, fmt.Sprintf("column 7 holds %q; is this a free-format copybook? (use -free)", ind)}
 			}
 			text = raw[7:end]
 		} else {
 			text = raw
 			t := strings.TrimSpace(text)
 			if strings.HasPrefix(t, "*>") {
-				out = append(out, line{n: n, comment: &Comment{n, strings.TrimSpace(t[2:])}})
+				out = append(out, line{n: n, comment: &Comment{Line: n, Text: strings.TrimSpace(t[2:])}})
 				continue
 			}
 			if strings.HasPrefix(t, ">>") {
@@ -211,7 +235,7 @@ func splitLines(file, src string, format Format) ([]line, error) {
 		code, inline := splitInline(text)
 		if strings.TrimSpace(code) == "" {
 			if inline != "" {
-				out = append(out, line{n: n, comment: &Comment{n, inline}})
+				out = append(out, line{n: n, comment: &Comment{Line: n, Text: inline}})
 			} else {
 				out = append(out, line{n: n, blank: true})
 			}
@@ -219,7 +243,22 @@ func splitLines(file, src string, format Format) ([]line, error) {
 		}
 		out = append(out, line{n: n, code: code, inline: inline})
 	}
-	return out, nil
+	return out, warns, nil
+}
+
+// cutAnnotation explains a fixed-format comment line whose annotation
+// probably runs into columns 73-80: the identification area holds an @,
+// or a tag line's text reaches column 72 with no space before column 73.
+func cutAnnotation(raw string) string {
+	text, ident := raw[7:72], raw[72:]
+	if strings.Contains(ident, "@") {
+		return fmt.Sprintf("columns 73-80 hold %q, which cobc ignores; move the annotation into columns 8-72", strings.TrimSpace(ident))
+	}
+	at := strings.LastIndex(text, "@")
+	if at < 0 || text[len(text)-1] == ' ' || ident[0] == ' ' {
+		return ""
+	}
+	return fmt.Sprintf("the annotation %q is cut at column 72 (cobc ignores columns 73-80); move it to the next comment line", strings.TrimSpace(text[at:]))
 }
 
 // splitInline separates a *> comment from code, outside literals.
@@ -444,9 +483,11 @@ func literal(t token) (Literal, bool) {
 	u := strings.ToUpper(t.text)
 	switch u {
 	case "SPACE", "SPACES":
-		return Literal{Text: " "}, true
+		return Literal{Text: " ", Figurative: true}, true
 	case "ZERO", "ZEROS", "ZEROES":
-		return Literal{Text: "0", Numeric: true}, true
+		return Literal{Text: "0", Numeric: true, Figurative: true}, true
+	case "LOW-VALUE", "LOW-VALUES", "HIGH-VALUE", "HIGH-VALUES":
+		return Literal{Text: u, Figurative: true}, true
 	}
 	if _, err := strconv.ParseFloat(strings.TrimPrefix(t.text, "+"), 64); err == nil {
 		return Literal{Text: t.text, Numeric: true}, true
@@ -487,7 +528,14 @@ func nest(file string, entries []*Entry) ([]*Entry, error) {
 			stack = stack[:len(stack)-1]
 		}
 		if len(stack) == 0 {
-			return nil, &Error{file, e.Line, fmt.Sprintf("level %02d item %s is not under a level-01 record", e.Level, e.Name)}
+			if len(roots) > 0 {
+				return nil, &Error{file, e.Line, fmt.Sprintf("level %02d item %s follows a level-01 or 77 entry but is not under a level-01 record", e.Level, e.Name)}
+			}
+			// The copybook holds only the record's fields; the program
+			// declares the 01 it COPYs them under.
+			syn := &Entry{Line: e.Line, Level: 1, Synthetic: true, Usage: "DISPLAY"}
+			roots = append(roots, syn)
+			stack = []*Entry{syn}
 		}
 		p := stack[len(stack)-1]
 		e.Parent = p

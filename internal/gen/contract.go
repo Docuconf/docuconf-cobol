@@ -65,5 +65,35 @@ func (c *Config) ContractCUE() ([]byte, error) {
 		}
 		return nil, &Error{ps}
 	}
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return c.annotateLengths(out), nil
+}
+
+// annotateLengths adds a comment above each variable whose length the
+// PIC limits but the contract cannot state (SPEC §4.3 has maxLength for
+// strings only, and no item length for lists), so the platform team sees
+// the limit that the loader enforces at boot.
+func (c *Config) annotateLengths(cue []byte) []byte {
+	lines := strings.Split(string(cue), "\n")
+	notes := map[string]string{}
+	for _, v := range c.Vars {
+		switch {
+		case v.Type == tList && v.Items == tString:
+			notes[v.Env] = fmt.Sprintf("// Each item must fit %s (%d bytes). The contract cannot state an item length\n\t\t// yet, so the COBOL loader rejects a longer item at boot (out_of_range).", v.Field, v.Pic.Size)
+		case v.Type == tURL || v.Type == tJSON:
+			notes[v.Env] = fmt.Sprintf("// The value must fit %s (%d bytes). The contract cannot state a %s's length,\n\t\t// so the COBOL loader rejects a longer value at boot (out_of_range).", v.Field, v.Pic.Size, v.Type)
+		}
+	}
+	var out []string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "\t\t") && strings.HasSuffix(l, ": {") {
+			if n, ok := notes[strings.TrimSuffix(strings.TrimPrefix(l, "\t\t"), ": {")]; ok {
+				out = append(out, "\t\t"+n)
+			}
+		}
+		out = append(out, l)
+	}
+	return []byte(strings.Join(out, "\n"))
 }

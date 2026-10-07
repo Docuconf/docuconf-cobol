@@ -1,20 +1,78 @@
       *> docuconf runtime: paragraphs for a generated loader.
-      *> docuconf-cobol generate inlines it into every loader. Each
+      *> docuconf-cobol generate inlines it into every loader, or the
+      *> loader COPYs it (-runtime copy). The loader declares the
+      *> termination log file DC-TLOG, with record DC-TLOG-LINE. Each
       *> paragraph works on DC-WORK (DCRTWS.cpy): DC-NAME is the
       *> variable being read, DC-RAW(1:DC-LEN) its value, and a
       *> problem is reported through DC-PROBLEM, which never prints
       *> the value.
       *> Valid in fixed and free format.
 
-      *> Prints DC-NAME, DC-MSG and DC-CODE on stderr and counts it.
+      *> Records a problem: DC-NAME, DC-MSG and DC-CODE. DC-REPORT
+      *> prints them all at the end.
        DC-PROBLEM.
            ADD 1 TO DC-PROBLEMS
            MOVE "N" TO DC-OK
-           DISPLAY "docuconf: " DC-NAME(1:DC-NAME-LEN) ": "
-               FUNCTION TRIM(DC-MSG TRAILING) " ("
-               FUNCTION TRIM(DC-CODE TRAILING) ")"
-               UPON SYSERR
-           END-DISPLAY.
+           IF DC-PROBLEMS <= 100
+               MOVE SPACES TO DC-LINE(DC-PROBLEMS)
+               STRING "  " DC-NAME(1:DC-NAME-LEN) ": "
+                   FUNCTION TRIM(DC-MSG TRAILING) " ("
+                   FUNCTION TRIM(DC-CODE TRAILING) ")"
+                   DELIMITED BY SIZE INTO DC-LINE(DC-PROBLEMS)
+               END-STRING
+           END-IF.
+
+      *> Prints every problem on stderr, under one header, as every
+      *> docuconf SDK does, and writes the same lines to the
+      *> termination log: DOCUCONF_TERMINATION_LOG ("-" for none), else
+      *> /dev/termination-log when it exists.
+       DC-REPORT.
+           MOVE SPACES TO DC-HEAD
+           IF DC-PROBLEMS = 1
+               MOVE "docuconf: 1 configuration problem:" TO DC-HEAD
+           ELSE
+               MOVE DC-PROBLEMS TO DC-IDX-ED
+               STRING "docuconf: " FUNCTION TRIM(DC-IDX-ED)
+                   " configuration problems:"
+                   DELIMITED BY SIZE INTO DC-HEAD
+               END-STRING
+           END-IF
+           DISPLAY FUNCTION TRIM(DC-HEAD TRAILING) UPON SYSERR
+           END-DISPLAY
+           PERFORM VARYING DC-K FROM 1 BY 1
+                   UNTIL DC-K > DC-PROBLEMS OR DC-K > 100
+               DISPLAY FUNCTION TRIM(DC-LINE(DC-K) TRAILING)
+                   UPON SYSERR
+               END-DISPLAY
+           END-PERFORM
+           MOVE SPACES TO DC-TLOG-PATH
+           ACCEPT DC-TLOG-PATH
+               FROM ENVIRONMENT "DOCUCONF_TERMINATION_LOG"
+               ON EXCEPTION
+                   MOVE SPACES TO DC-TLOG-PATH
+           END-ACCEPT
+           IF DC-TLOG-PATH = SPACES
+               MOVE "/dev/termination-log" TO DC-TLOG-PATH
+               OPEN INPUT DC-TLOG
+               IF DC-TLOG-STATUS = "00"
+                   CLOSE DC-TLOG
+               ELSE
+                   MOVE "-" TO DC-TLOG-PATH
+               END-IF
+           END-IF
+           IF DC-TLOG-PATH NOT = "-"
+               OPEN OUTPUT DC-TLOG
+               IF DC-TLOG-STATUS = "00"
+                   MOVE DC-HEAD TO DC-TLOG-LINE
+                   WRITE DC-TLOG-LINE END-WRITE
+                   PERFORM VARYING DC-K FROM 1 BY 1
+                           UNTIL DC-K > DC-PROBLEMS OR DC-K > 100
+                       MOVE DC-LINE(DC-K) TO DC-TLOG-LINE
+                       WRITE DC-TLOG-LINE END-WRITE
+                   END-PERFORM
+                   CLOSE DC-TLOG
+               END-IF
+           END-IF.
 
        DC-BAD-TYPE.
            MOVE "invalid_type" TO DC-CODE

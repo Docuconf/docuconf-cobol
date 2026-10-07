@@ -42,11 +42,21 @@ var (
 type Config struct {
 	Copybook string // file name, as COPY names it in the loader
 	Record   string // the level-01 data name
-	Service  string
-	Package  string
-	Program  string
+	// Wrap is true when the copybook holds only the record's fields: the
+	// loader declares the level-01 Record itself and COPYs the fields
+	// under it, as the program does.
+	Wrap    bool
+	Service string
+	Package string
+	Program string
+	// Runtime is how the loader gets the docuconf runtime: "inline"
+	// (the default) or "copy" (COPY DCRTWS and DCRTPD).
+	Runtime  string
 	Vars     []*Var
 	Files    []*FileInput
+	Warnings []string
+
+	names map[string]int // every data name in the copybook, with its line
 }
 
 // Var is one environment variable, read into one field.
@@ -61,11 +71,19 @@ type Var struct {
 	Double   bool // COMP-1 or COMP-2: a floating-point field
 	Present  string
 	Default  []string // as written; nil when there is none
-	Values   []string // enum values
-	Conds    []string // the enum's level-88 names
-	Unit     string   // duration field unit
-	UnitNs   int64
-	Encoding string // list or duration wire encoding
+	// Bounds narrower than the PIC, which the loader checks too: Min and
+	// Max for an int (or an int list's items), MinRat and MaxRat for a
+	// float, MinNs and MaxNs for a duration.
+	Min, Max       *big.Int
+	MinRat, MaxRat *big.Rat
+	MinNs, MaxNs   *int64
+	MinItems       int      // 0 when there is no minimum
+	MaxItems       int      // below Occurs when @max-items narrows it, else 0
+	Values         []string // enum values
+	Conds          []string // the enum's level-88 names
+	Unit           string   // duration field unit
+	UnitNs         int64
+	Encoding       string // list or duration wire encoding
 	// lists
 	Items     string
 	Separator string
@@ -96,16 +114,37 @@ type Options struct {
 	Program string
 	Package string
 	Prefix  string
+	// Record picks the level-01 record of a copybook that has several.
+	// For a copybook with no level-01 record, it names the 01 the loader
+	// declares around the fields (default DC-RECORD).
+	Record string
+	// Runtime is "inline" (default) or "copy".
+	Runtime string
 }
 
 // problems collects errors with their copybook line.
 type problems struct {
 	file string
-	list []string
+	list []problem
 }
 
 func (p *problems) add(line int, format string, args ...any) {
-	p.list = append(p.list, fmt.Sprintf("%s:%d: %s", p.file, line, fmt.Sprintf(format, args...)))
+	p.list = append(p.list, problem{line, fmt.Sprintf("%s:%d: %s", p.file, line, fmt.Sprintf(format, args...))})
+}
+
+type problem struct {
+	line int
+	text string
+}
+
+// sorted returns the problems in copybook line order.
+func (p *problems) sorted() []string {
+	slices.SortStableFunc(p.list, func(a, b problem) int { return a.line - b.line })
+	out := make([]string, len(p.list))
+	for i, x := range p.list {
+		out[i] = x.text
+	}
+	return out
 }
 
 // Error lists every problem found in a copybook.
@@ -125,7 +164,7 @@ func Load(path string, opts Options) (*Config, error) {
 // Build builds the configuration model of a copybook's source.
 func Build(path, src string, opts Options) (*Config, error) {
 	name := filepath.Base(path)
-	roots, err := copybook.Parse(name, src, opts.Format)
+	roots, warns, err := copybook.Parse(name, src, opts.Format)
 	if err != nil {
 		return nil, err
 	}
@@ -136,15 +175,43 @@ func Build(path, src string, opts Options) (*Config, error) {
 			recs = append(recs, r)
 		}
 	}
-	if len(recs) != 1 {
-		return nil, &Error{[]string{fmt.Sprintf("%s: expected one level-01 configuration record, found %d", name, len(recs))}}
+	rec, err := pickRecord(name, recs, opts.Record)
+	if err != nil {
+		return nil, err
 	}
-	rec := recs[0]
+	c := &Config{Copybook: name, Record: rec.Name, Wrap: rec.Synthetic, Runtime: firstOf(opts.Runtime, "inline")}
+	for _, w := range warns {
+		c.Warnings = append(c.Warnings, w.String())
+	}
+	if rec.Synthetic {
+		c.Record = strings.ToUpper(firstOf(opts.Record, "DC-RECORD"))
+		// The record's tags go above its first field: take them from there.
+		if len(rec.Children) > 0 {
+			rec.Doc = liftRecordTags(rec.Children[0])
+		}
+	}
+	if !slices.Contains([]string{"inline", "copy"}, c.Runtime) {
+		return nil, &Error{[]string{fmt.Sprintf("-runtime %s: use inline or copy", c.Runtime)}}
+	}
+	c.names = map[string]int{}
+	var collect func(e *copybook.Entry)
+	collect = func(e *copybook.Entry) {
+		if e.Name != "" && e.Name != "FILLER" {
+			if _, dup := c.names[e.Name]; !dup {
+				c.names[e.Name] = e.Line
+			}
+		}
+		for _, ch := range e.Children {
+			collect(ch)
+		}
+	}
+	for _, r := range roots {
+		collect(r)
+	}
 	rd, err := parseDoc(rec.Doc)
 	if err != nil {
 		p.add(rec.Line, "%v", err)
 	}
-	c := &Config{Copybook: name, Record: rec.Name}
 	one := func(d doc, t string) string {
 		tg, ok := d.get(t)
 		if !ok {
@@ -157,17 +224,25 @@ func Build(path, src string, opts Options) (*Config, error) {
 		return tg.values[0]
 	}
 	c.Service = firstOf(opts.Service, one(rd, "service"))
-	c.Program = strings.ToUpper(firstOf(opts.Program, one(rd, "program"), "LOAD-"+rec.Name))
+	c.Program = strings.ToUpper(firstOf(opts.Program, one(rd, "program"), defaultProgram(name, c.Record)))
 	c.Package = firstOf(opts.Package, one(rd, "package"))
 	prefix := strings.ToUpper(firstOf(opts.Prefix, one(rd, "prefix")))
 	for _, t := range rd.tags {
-		if !slices.Contains([]string{"service", "program", "package", "prefix"}, t.name) {
-			p.add(t.line, "%s does not apply to the level-01 record; it takes @service, @program, @package and @prefix", t.as)
+		if !slices.Contains(recordTags, t.name) {
+			p.add(t.line, "%s does not apply to the level-01 record; it takes @service, @program, @package and @prefix%s", t.as, suggest(t.name, recordTags))
 		}
+	}
+	recName := c.Record
+	if rec.Synthetic {
+		recName = "the first field"
 	}
 	switch {
 	case c.Service == "":
-		p.add(rec.Line, "name the service: add *> @service <name> above %s, or pass -name", rec.Name)
+		p.add(rec.Line, "name the service: add *> @service <name> above %s, or pass -name", recName)
+	case c.Service != strings.ToLower(c.Service) && dnsLabelRe.MatchString(strings.ToLower(c.Service)):
+		// Mainframe sources are upper case; a service name is a DNS label.
+		c.Warnings = append(c.Warnings, fmt.Sprintf("%s:%d: warning: service name %s is lower-cased to %s, as a DNS label must be", name, rec.Line, c.Service, strings.ToLower(c.Service)))
+		c.Service = strings.ToLower(c.Service)
 	case !dnsLabelRe.MatchString(c.Service):
 		p.add(rec.Line, "service name %q must be a DNS label such as orders-batch", c.Service)
 	}
@@ -259,9 +334,95 @@ func Build(path, src string, opts Options) (*Config, error) {
 		}
 	}
 	if len(p.list) > 0 {
-		return nil, &Error{p.list}
+		return nil, &Error{p.sorted()}
 	}
 	return c, nil
+}
+
+// pickRecord chooses the configuration record: the only level-01 record,
+// or the one -record names.
+func pickRecord(file string, recs []*copybook.Entry, want string) (*copybook.Entry, error) {
+	want = strings.ToUpper(want)
+	var names []string
+	for _, r := range recs {
+		if r.Synthetic {
+			return r, nil // a copybook of fields; want names the wrapper
+		}
+		if want != "" && r.Name == want {
+			return r, nil
+		}
+		names = append(names, r.Name)
+	}
+	switch {
+	case len(recs) == 0:
+		return nil, &Error{[]string{fmt.Sprintf("%s: no configuration record: the copybook declares no data items", file)}}
+	case want != "":
+		return nil, &Error{[]string{fmt.Sprintf("%s: -record %s: the level-01 records are %s", file, want, strings.Join(names, ", "))}}
+	case len(recs) > 1:
+		return nil, &Error{[]string{fmt.Sprintf("%s: the copybook has %d level-01 records (%s); pick the configuration record with -record %s", file, len(recs), strings.Join(names, ", "), names[0])}}
+	}
+	return recs[0], nil
+}
+
+// liftRecordTags moves the record tags (@service, @prefix, @program,
+// @package) out of the first field's comments, for a copybook with no
+// level-01 record, and returns them as the record's comments.
+func liftRecordTags(first *copybook.Entry) []copybook.Comment {
+	var rec, keep []copybook.Comment
+	for _, c := range first.Doc {
+		t := strings.TrimSpace(c.Text)
+		if strings.HasPrefix(t, "@") {
+			if words, err := splitWords(t); err == nil && len(words) > 0 {
+				var recWords, fieldWords []string
+				var cur *[]string
+				for _, w := range words {
+					text := w.text
+					if w.quoted {
+						text = cobolLiteral(w.text)
+					}
+					if !w.quoted && strings.HasPrefix(w.text, "@") {
+						if slices.Contains(recordTags, normTag(w.text[1:])) {
+							cur = &recWords
+						} else {
+							cur = &fieldWords
+						}
+					}
+					if cur != nil {
+						*cur = append(*cur, text)
+					}
+				}
+				if len(recWords) > 0 {
+					rec = append(rec, copybook.Comment{Line: c.Line, Text: strings.Join(recWords, " ")})
+				}
+				if len(fieldWords) > 0 {
+					keep = append(keep, copybook.Comment{Line: c.Line, Text: strings.Join(fieldWords, " "), Inline: c.Inline})
+				}
+				continue
+			}
+		}
+		keep = append(keep, c)
+	}
+	first.Doc = keep
+	return rec
+}
+
+// memberRe matches a name that is also a PDS member name.
+var memberRe = regexp.MustCompile(`^[A-Z][A-Z0-9]{0,7}$`)
+
+// defaultProgram is the loader's PROGRAM-ID when neither @program nor
+// -program gives one: for a copybook named like a PDS member (ORDCFGC.cpy),
+// the member's first seven characters and L (ORDCFGCL); otherwise
+// LOAD-<record>.
+func defaultProgram(file, record string) string {
+	base := strings.TrimSuffix(file, filepath.Ext(file))
+	base = strings.ToUpper(base)
+	if memberRe.MatchString(base) {
+		if len(base) > 7 {
+			base = base[:7]
+		}
+		return base + "L"
+	}
+	return "LOAD-" + record
 }
 
 func firstOf(s ...string) string {
@@ -344,7 +505,7 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	fail := func(format string, args ...any) { p.add(e.Line, "%s: %s", e.Name, fmt.Sprintf(format, args...)) }
 	for _, t := range d.tags {
 		if !slices.Contains(knownVarTags, t.name) {
-			p.add(t.line, "%s: unknown tag %s", e.Name, t.as)
+			p.add(t.line, "%s: unknown tag %s%s", e.Name, t.as, suggest(t.name, knownVarTags))
 		}
 	}
 	single := func(name string) (string, bool) {
@@ -383,7 +544,7 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	}
 	desc := d.description()
 	if len([]rune(desc)) < 5 {
-		fail("needs a description of at least 5 characters: write a comment line above it, or @desc")
+		fail("needs a description of at least 5 characters, as the docuconf spec requires of every input (SPEC §4.2): write a comment line above it, or @desc")
 	}
 	v.Required, v.Secret = flag("required"), flag("secret")
 	o := map[string]any{"description": desc}
@@ -556,9 +717,10 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	case tInt:
 		allow("min", "max")
 		if e.Occurs == 0 {
-			lo, hi := intRange(pic)
-			lo, hi = b.bounds(e, d, lo, hi, "min", "max")
+			picLo, picHi := intRange(pic)
+			lo, hi := b.bounds(e, d, picLo, picHi, "min", "max")
 			o["min"], o["max"] = json.Number(lo.String()), json.Number(hi.String())
+			v.Min, v.Max = narrower(lo, picLo), narrower(hi, picHi)
 		}
 	case tFloat:
 		allow("min", "max")
@@ -577,10 +739,14 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 				fail("@%s %s is outside what PIC %s holds", k, s, e.Pic)
 				continue
 			}
+			if exp := new(big.Rat).Mul(r, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(pic.Frac)), nil))); !v.Double && !exp.IsInt() {
+				fail("@%s %s has more decimal places than PIC %s holds", k, s, e.Pic)
+				continue
+			}
 			if k == "min" {
-				lo = r
+				lo, v.MinRat = r, r
 			} else {
-				hi = r
+				hi, v.MaxRat = r, r
 			}
 		}
 		if lo != nil {
@@ -607,7 +773,8 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 			fail("@encoding %s is not a duration encoding (go, iso8601, seconds, timespan)", v.Encoding)
 		}
 		o["encoding"] = v.Encoding
-		lo, hi := durationRange(pic, ns)
+		picLo, picHi := durationRange(pic, ns)
+		lo, hi := picLo, picHi
 		for _, k := range []string{"min", "max"} {
 			s, ok := single(k)
 			if !ok {
@@ -618,14 +785,15 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 				fail("@%s %s is not a duration such as 30s", k, s)
 				continue
 			}
-			if int64(dur) < lo || int64(dur) > hi {
-				fail("@%s %s is outside what PIC %s of %s holds (%s to %s)", k, s, e.Pic, unit, formatDuration(lo), formatDuration(hi))
+			if int64(dur) < picLo || int64(dur) > picHi {
+				fail("@%s %s is outside what PIC %s of %s holds (%s to %s)", k, s, e.Pic, unit, formatDuration(picLo), formatDuration(picHi))
 				continue
 			}
+			x := int64(dur)
 			if k == "min" {
-				lo = int64(dur)
+				lo, v.MinNs = x, &x
 			} else {
-				hi = int64(dur)
+				hi, v.MaxNs = x, &x
 			}
 		}
 		o["min"], o["max"] = formatDuration(lo), formatDuration(hi)
@@ -642,14 +810,32 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 		}
 	}
 
+	// The default is @default or, failing that, the VALUE clause.
+	source, defLine := "@default", 0
 	if t, ok := d.get("default"); ok {
-		if v.Required || v.Secret {
-			p.add(t.line, "%s: a required or secret variable has no default", e.Name)
+		v.Default, defLine = t.values, t.line
+	}
+	if words, ok, err := valueDefault(e, v); err != nil {
+		fail("%v", err)
+	} else if ok && v.Default == nil {
+		v.Default, source, defLine = words, "VALUE", e.Line
+	} else if ok {
+		fromValue, err1 := b.defaultValue(&Var{Type: v.Type, Items: v.Items, Pic: v.Pic, Double: v.Double, Unit: v.Unit, UnitNs: v.UnitNs, Occurs: v.Occurs, Default: words}, e)
+		fromTag, err2 := b.defaultValue(v, e)
+		if err1 == nil && err2 == nil && fmt.Sprint(fromValue) != fmt.Sprint(fromTag) {
+			fail("VALUE %s and @default %s disagree; keep one of them", strings.Join(words, " "), strings.Join(v.Default, " "))
 		}
-		v.Default = t.values
+	}
+	if v.Default != nil {
+		switch {
+		case v.Secret:
+			p.add(defLine, "%s: a @secret variable cannot have a default (%s); supply it from a Kubernetes Secret", e.Name, source)
+		case v.Required:
+			p.add(defLine, "%s: a @required variable cannot have a default (%s); drop @required, or the default", e.Name, source)
+		}
 		def, err := b.defaultValue(v, e)
 		if err != nil {
-			p.add(t.line, "%s: @default: %v", e.Name, err)
+			p.add(defLine, "%s: %s: %v", e.Name, source, err)
 		} else {
 			o["default"] = def
 		}
@@ -711,10 +897,15 @@ func (b *builder) list(e *copybook.Entry, d doc, v *Var, o map[string]any, singl
 		o["minItems"] = int64(minItems)
 	}
 	o["maxItems"] = int64(maxItems)
+	v.MinItems = minItems
+	if maxItems < v.Occurs {
+		v.MaxItems = maxItems
+	}
 	if v.Items == tInt {
-		lo, hi := intRange(v.Pic)
-		lo, hi = b.bounds(e, d, lo, hi, "itemmin", "itemmax")
+		picLo, picHi := intRange(v.Pic)
+		lo, hi := b.bounds(e, d, picLo, picHi, "itemmin", "itemmax")
 		o["itemMin"], o["itemMax"] = json.Number(lo.String()), json.Number(hi.String())
+		v.Min, v.Max = narrower(lo, picLo), narrower(hi, picHi)
 	}
 	// The number of items goes in the DEPENDING ON item, or in @count.
 	count, hasCount := single("count")
@@ -740,8 +931,17 @@ func (b *builder) list(e *copybook.Entry, d doc, v *Var, o map[string]any, singl
 	}
 }
 
+// narrower returns x when it differs from the PIC's limit, else nil.
+func narrower(x, pic *big.Int) *big.Int {
+	if x.Cmp(pic) == 0 {
+		return nil
+	}
+	return x
+}
+
 // bounds narrows the PIC range with @min and @max (or the item tags).
-func (b *builder) bounds(e *copybook.Entry, d doc, lo, hi *big.Int, minTag, maxTag string) (*big.Int, *big.Int) {
+func (b *builder) bounds(e *copybook.Entry, d doc, picLo, picHi *big.Int, minTag, maxTag string) (*big.Int, *big.Int) {
+	lo, hi := picLo, picHi
 	for _, k := range []string{minTag, maxTag} {
 		t, ok := d.get(k)
 		if !ok {
@@ -756,12 +956,12 @@ func (b *builder) bounds(e *copybook.Entry, d doc, lo, hi *big.Int, minTag, maxT
 			b.p.add(t.line, "%s: %s %s is not an integer", e.Name, t.as, t.values[0])
 			continue
 		}
-		if n.Cmp(lo) < 0 || n.Cmp(hi) > 0 {
+		if n.Cmp(picLo) < 0 || n.Cmp(picHi) > 0 {
 			hint := ""
-			if n.Sign() < 0 && lo.Sign() == 0 {
+			if n.Sign() < 0 && picLo.Sign() == 0 {
 				hint = "; PIC 9 is unsigned, use S9 for negative values"
 			}
-			b.p.add(t.line, "%s: %s %s is outside what PIC %s holds (%s to %s)%s", e.Name, t.as, n, e.Pic, lo, hi, hint)
+			b.p.add(t.line, "%s: %s %s is outside what PIC %s holds (%s to %s)%s", e.Name, t.as, n, e.Pic, picLo, picHi, hint)
 			continue
 		}
 		if k == minTag {
@@ -827,27 +1027,41 @@ func (b *builder) defaultValue(v *Var, e *copybook.Entry) (any, error) {
 			return nil, fmt.Errorf("%q is not JSON", s)
 		}
 		return x, nil
-	case tInt, tFloat:
+	case tInt:
 		s, err := one()
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := new(big.Rat).SetString(s); !ok {
+		n, ok := new(big.Int).SetString(strings.TrimPrefix(s, "+"), 10)
+		if !ok {
+			return nil, fmt.Errorf("%q is not an integer", s)
+		}
+		return json.Number(n.String()), nil
+	case tFloat:
+		s, err := one()
+		if err != nil {
+			return nil, err
+		}
+		r, ok := new(big.Rat).SetString(strings.TrimPrefix(s, "+"))
+		if !ok {
 			return nil, fmt.Errorf("%q is not a number", s)
 		}
-		return json.Number(s), nil
+		if !v.Double && !new(big.Rat).Mul(r, new(big.Rat).SetInt(pow10(v.Pic.Frac))).IsInt() {
+			return nil, fmt.Errorf("%s has more decimal places than PIC %s holds", s, e.Pic)
+		}
+		return json.Number(ratNumber(r, max(v.Pic.Frac, decimals(s)))), nil
 	case tBool:
 		s, err := one()
 		if err != nil {
 			return nil, err
 		}
 		switch strings.ToLower(s) {
-		case "true":
+		case "true", "y", "1":
 			return true, nil
-		case "false":
+		case "false", "n", "0":
 			return false, nil
 		}
-		return nil, fmt.Errorf("%q is not true or false", s)
+		return nil, fmt.Errorf("%q is not true or false (or Y, N, 1, 0)", s)
 	case tDuration:
 		s, err := one()
 		if err != nil {
@@ -857,8 +1071,12 @@ func (b *builder) defaultValue(v *Var, e *copybook.Entry) (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%q is not a duration such as 30s", s)
 		}
-		if int64(d)%v.UnitNs != 0 && v.Pic.Frac == 0 {
-			return nil, fmt.Errorf("%s is not a whole number of %s", s, v.Unit)
+		// The field holds multiples of unit / 10^Frac.
+		if new(big.Int).Rem(new(big.Int).Mul(big.NewInt(int64(d)), pow10(v.Pic.Frac)), big.NewInt(v.UnitNs)).Sign() != 0 {
+			if v.Pic.Frac == 0 {
+				return nil, fmt.Errorf("%s is not a whole number of %s, which PIC %s counts in", s, v.Unit, e.Pic)
+			}
+			return nil, fmt.Errorf("%s is finer than PIC %s of %s holds", s, e.Pic, v.Unit)
 		}
 		return formatDuration(int64(d)), nil
 	case tList:
@@ -882,6 +1100,56 @@ func (b *builder) defaultValue(v *Var, e *copybook.Entry) (any, error) {
 		return out, nil
 	}
 	return nil, fmt.Errorf("unsupported")
+}
+
+func pow10(n int) *big.Int { return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil) }
+
+// decimals counts the digits after the point in a number as written.
+func decimals(s string) int {
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		return len(s) - i - 1
+	}
+	return 0
+}
+
+// valueDefault reads the default a VALUE clause gives a field, in the
+// words @default would take. SPACES, ZEROS, LOW-VALUES and HIGH-VALUES
+// only initialise the field, so they give no default; nor does a field
+// without VALUE.
+func valueDefault(e *copybook.Entry, v *Var) ([]string, bool, error) {
+	if len(e.Values) == 0 || e.Values[0].Figurative {
+		return nil, false, nil
+	}
+	lit := e.Values[0]
+	if len(e.Values) > 1 || lit.Thru != nil {
+		return nil, false, fmt.Errorf("VALUE takes one literal on a configuration field")
+	}
+	if v.Type == tList {
+		return nil, false, fmt.Errorf("VALUE %s on an OCCURS table sets every item; give the list's default with @default <item>...", lit.Text)
+	}
+	text := lit.Text
+	switch v.Type {
+	case tInt, tFloat:
+		if !lit.Numeric {
+			return nil, false, fmt.Errorf("VALUE %q is not a number", text)
+		}
+	case tBool:
+		// Y or N in a PIC X, 1 or 0 in a PIC 9: defaultValue reads them.
+	case tDuration:
+		if !lit.Numeric {
+			return nil, false, fmt.Errorf("VALUE %q is not a number of %s", text, v.Unit)
+		}
+		r, ok := new(big.Rat).SetString(strings.TrimPrefix(text, "+"))
+		if !ok {
+			return nil, false, fmt.Errorf("VALUE %s is not a number", text)
+		}
+		ns := new(big.Rat).Mul(r, new(big.Rat).SetInt64(v.UnitNs))
+		if !ns.IsInt() || !ns.Num().IsInt64() {
+			return nil, false, fmt.Errorf("VALUE %s %s is not a whole number of nanoseconds", text, v.Unit)
+		}
+		text = formatDuration(ns.Num().Int64())
+	}
+	return []string{text}, true, nil
 }
 
 var knownFileTags = []string{"file", "type", "desc", "required", "secret", "path", "pathenv", "reload",
@@ -942,7 +1210,7 @@ func (b *builder) file(e *copybook.Entry, d doc, group string) {
 	for _, t := range d.tags {
 		switch {
 		case !slices.Contains(knownFileTags, t.name):
-			p.add(t.line, "%s: unknown tag %s", e.Name, t.as)
+			p.add(t.line, "%s: unknown tag %s%s", e.Name, t.as, suggest(t.name, knownFileTags))
 		case slices.Contains([]string{"format", "schema", "dnsnames", "keyalgorithms", "minremaining", "requireca",
 			"mincertificates", "passwordvar", "pattern", "minlength", "maxlength"}, t.name) && !slices.Contains(specific, t.name):
 			p.add(t.line, "%s: %s does not apply to a %s file", e.Name, t.as, f.Type)
@@ -950,7 +1218,7 @@ func (b *builder) file(e *copybook.Entry, d doc, group string) {
 	}
 	desc := d.description()
 	if len([]rune(desc)) < 5 {
-		fail("needs a description of at least 5 characters: write a comment line above it, or @desc")
+		fail("needs a description of at least 5 characters, as the docuconf spec requires of every input (SPEC §4.2): write a comment line above it, or @desc")
 	}
 	o := map[string]any{"type": f.Type, "description": desc}
 	if d.has("required") {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docuconf/docuconf-cobol/copybooks"
 	"github.com/docuconf/docuconf-cobol/internal/copybook"
 )
 
@@ -150,6 +151,18 @@ func TestLoaderCompiles(t *testing.T) {
 			t.Errorf("cobc %s: %v\n%s", format, err, out)
 		}
 	}
+
+	// -runtime copy: the loader COPYs the runtime from a copy library.
+	_, loader = generate(t, "testdata/all-types.cpy", Options{Runtime: "copy"})
+	lib := t.TempDir()
+	os.WriteFile(filepath.Join(lib, "DCRTWS.cpy"), []byte(copybooks.WorkingStorage), 0o644)
+	os.WriteFile(filepath.Join(lib, "DCRTPD.cpy"), []byte(copybooks.Procedures), 0o644)
+	os.WriteFile(filepath.Join(dir, "GWCFG.cbl"), loader, 0o644)
+	cmd := exec.Command(cobc, "-m", "-I", abs, "-I", lib, "-o", filepath.Join(dir, "GWCFG.so"), "GWCFG.cbl")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("cobc -runtime copy: %v\n%s", err, out)
+	}
 }
 
 // TestProblems checks the messages a developer sees for mistakes.
@@ -184,11 +197,37 @@ func TestProblems(t *testing.T) {
 			"a file input needs @path"},
 		{"duplicate variable", "      *> Port to listen on\n           05  CFG-PORT PIC 9(5).\n      *> Port again here\n      *> @env PORT\n           05  CFG-PORT2 PIC 9(5).\n",
 			"variable PORT is also read by the field at line 4"},
+		{"max beyond PIC after min", "      *> Port to listen on\n      *> @min 1  @max 100000\n           05  CFG-PORT PIC 9(5).\n",
+			"@max 100000 is outside what PIC 9(5) holds (0 to 99999)"},
+		{"did you mean", "      *> Port to listen on\n      *> @defualt 80\n           05  CFG-PORT PIC 9(5).\n",
+			"unknown tag @defualt; did you mean @default?"},
+		{"secret with default", "      *> Database password\n      *> @secret  @default x\n           05  CFG-PWD PIC X(20).\n",
+			"demo.cpy:4: CFG-PWD: a @secret variable cannot have a default (@default); supply it from a Kubernetes Secret"},
+		{"required with VALUE", "      *> Database host\n      *> @required\n           05  CFG-HOST PIC X(20) VALUE 'db'.\n",
+			"demo.cpy:5: CFG-HOST: a @required variable cannot have a default (VALUE)"},
+		{"VALUE and default disagree", "      *> Port to listen on\n      *> @default 80\n           05  CFG-PORT PIC 9(5) VALUE 8080.\n",
+			"CFG-PORT: VALUE 8080 and @default 80 disagree; keep one of them"},
+		{"VALUE on a table", "      *> Allowed origins\n      *> @count CFG-N\n           05  CFG-ORIGINS PIC X(40) OCCURS 4 VALUE 'x'.\n           05  CFG-N PIC 9.\n",
+			"VALUE x on an OCCURS table sets every item; give the list's default with @default"},
+		{"default too precise", "      *> Share to sample\n      *> @default 0.123\n           05  CFG-R PIC 9V99.\n",
+			"CFG-R: @default: 0.123 has more decimal places than PIC 9V99 holds"},
+		{"VALUE too precise", "      *> Share to sample\n           05  CFG-R PIC 9V99 VALUE 0.125.\n",
+			"CFG-R: VALUE: 0.125 has more decimal places than PIC 9V99 holds"},
+		{"min too precise", "      *> Share to sample\n      *> @min 0.125\n           05  CFG-R PIC 9V99.\n",
+			"@min 0.125 has more decimal places than PIC 9V99 holds"},
+		{"int default not an integer", "      *> Port to listen on\n      *> @default 1.5\n           05  CFG-PORT PIC 9(5).\n",
+			`"1.5" is not an integer`},
+		{"collides with the loader", "      *> Name of the job\n      *> @env JOB_NAME\n           05  DC-NAME PIC X(20).\n",
+			"demo.cpy:5: DC-NAME is a name in the loader's working storage (DCRTWS); rename it"},
+		{"lines in order", "      *> Pw\n      *> @secret  @default x\n           05  CFG-PWD PIC X(20).\n",
+			"demo.cpy:4: CFG-PWD: a @secret variable cannot have a default (@default); supply it from a Kubernetes Secret\ndemo.cpy:5: CFG-PWD: needs a description"},
 	} {
 		_, err := Build("demo.cpy", head+c.body, Options{})
 		if err == nil {
 			c2, _ := Build("demo.cpy", head+c.body, Options{})
-			_, err = c2.ContractCUE()
+			if _, err = c2.ContractCUE(); err == nil {
+				_, err = c2.Loader()
+			}
 		}
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: got %v\nwant %q", c.name, err, c.want)
@@ -197,5 +236,61 @@ func TestProblems(t *testing.T) {
 	if _, err := Build("demo.cpy", "       01  DEMO-CONFIG.\n      *> Port to listen on\n           05  CFG-PORT PIC 9(5).\n", Options{}); err == nil ||
 		!strings.Contains(err.Error(), "name the service") {
 		t.Errorf("no service: %v", err)
+	}
+}
+
+// Tags may follow text in an inline comment, and Y, N, 1 and 0 are bool
+// defaults.
+func TestInlineTagsAndBoolDefaults(t *testing.T) {
+	src := "      *> @service demo\n       01  DEMO-CONFIG.\n" +
+		"           05  CFG-PORT PIC 9(5).  *> port number @default 80\n" +
+		"      *> Verbose output, mailed to ops@example.com\n      *> @type bool  @default Y\n           05  CFG-VERBOSE PIC X.\n"
+	c, err := Build("demo.cpy", src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := c.ContractJSON()
+	for _, w := range []string{`"default": 80`, `"description": "port number"`, `"default": true`, `ops@example.com`} {
+		if !strings.Contains(string(doc), w) {
+			t.Errorf("want %s in:\n%s", w, doc)
+		}
+	}
+}
+
+// A copybook with several records needs -record; one with none is
+// wrapped, and its record tags come from above the first field.
+func TestRecords(t *testing.T) {
+	two := "      *> @service a\n       01  A-CONFIG.\n      *> Port to listen on\n           05  A-PORT PIC 9(5).\n" +
+		"      *> @service b\n       01  B-CONFIG.\n      *> Port to listen on\n           05  B-PORT PIC 9(5).\n"
+	if _, err := Build("two.cpy", two, Options{}); err == nil || !strings.Contains(err.Error(), "the copybook has 2 level-01 records (A-CONFIG, B-CONFIG); pick the configuration record with -record A-CONFIG") {
+		t.Errorf("got %v", err)
+	}
+	c, err := Build("two.cpy", two, Options{Record: "b-config"})
+	if err != nil || c.Service != "b" || c.Vars[0].Env != "B_PORT" {
+		t.Fatalf("got %+v %v", c, err)
+	}
+	if _, err := Build("two.cpy", two, Options{Record: "C-CONFIG"}); err == nil || !strings.Contains(err.Error(), "the level-01 records are A-CONFIG, B-CONFIG") {
+		t.Errorf("got %v", err)
+	}
+
+	fields := "      *> @service demo  @prefix CFG-\n      *> Port to listen on\n      *> @min 1\n           05  CFG-PORT PIC 9(5).\n"
+	c, err = Build("CFGFLDS.cpy", fields, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Wrap || c.Record != "DC-RECORD" || c.Service != "demo" || c.Program != "CFGFLDSL" || c.Vars[0].Env != "PORT" {
+		t.Fatalf("got %+v", c)
+	}
+	loader, err := c.Loader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(loader), "       01  DC-RECORD.\n       COPY CFGFLDS.\n       PROCEDURE DIVISION USING DC-RECORD.\n") {
+		t.Errorf("loader linkage:\n%s", loader)
+	}
+	c, _ = Build("CFGFLDS.cpy", fields, Options{Record: "WS-CFG", Runtime: "copy"})
+	loader, _ = c.Loader()
+	if !strings.Contains(string(loader), "01  WS-CFG.") || !strings.Contains(string(loader), "       COPY DCRTWS.\n") || !strings.Contains(string(loader), "       COPY DCRTPD.\n") {
+		t.Errorf("loader:\n%s", loader)
 	}
 }

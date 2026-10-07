@@ -22,6 +22,8 @@ contract.#Contract & {
 			minLength:   20
 			maxLength:   64
 		}
+		// Each item must fit GW-BROKERS (40 bytes). The contract cannot state an item length
+		// yet, so the COBOL loader rejects a longer item at boot (out_of_range).
 		BROKERS: {
 			type:        "list"
 			description: "Brokers to connect to"
@@ -56,6 +58,8 @@ contract.#Contract & {
 			min:         1
 			max:         65535
 		}
+		// The value must fit GW-RATE-LIMITS (200 bytes). The contract cannot state a json's length,
+		// so the COBOL loader rejects a longer value at boot (out_of_range).
 		RATE_LIMITS: {
 			type:        "json"
 			description: "Rate limits per client"
@@ -129,6 +133,8 @@ contract.#Contract & {
 			description: "Reject unknown fields"
 			default:     false
 		}
+		// Each item must fit GW-TAGS (10 bytes). The contract cannot state an item length
+		// yet, so the COBOL loader rejects a longer item at boot (out_of_range).
 		TAGS: {
 			type:        "list"
 			description: "Tags added to every record"
@@ -138,6 +144,8 @@ contract.#Contract & {
 			separator: ";"
 			maxItems:  5
 		}
+		// The value must fit GW-UPSTREAM (100 bytes). The contract cannot state a url's length,
+		// so the COBOL loader rejects a longer value at boot (out_of_range).
 		UPSTREAM: {
 			type:        "url"
 			description: "Upstream base URL"
