@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -31,6 +32,14 @@ func generate(t *testing.T, path string, opts Options) (cue, loader []byte) {
 	return cue, loader
 }
 
+// generatorVersion matches the value of metadata.generator.version. It is
+// Version, which every release PR bumps, so golden comparisons ignore it.
+var generatorVersion = regexp.MustCompile(`(generator:\s*\{[^{}]*?\bversion:\s*)"[^"]*"`)
+
+func withoutGeneratorVersion(b []byte) string {
+	return generatorVersion.ReplaceAllString(string(b), `${1}"<generator-version>"`)
+}
+
 func golden(t *testing.T, path string, got []byte) {
 	t.Helper()
 	if *update {
@@ -42,8 +51,20 @@ func golden(t *testing.T, path string, got []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(want) != string(got) {
+	if withoutGeneratorVersion(want) != withoutGeneratorVersion(got) {
 		t.Errorf("%s differs; run go test ./internal/gen -update and review the diff", path)
+	}
+}
+
+func TestGoldenComparisonIgnoresOnlyTheGeneratorVersion(t *testing.T) {
+	cue, _ := generate(t, "testdata/all-types.cpy", Options{})
+	bumped := strings.Replace(string(cue), `"`+Version+`"`, `"99.0.0"`, 1)
+	if bumped == string(cue) || withoutGeneratorVersion([]byte(bumped)) != withoutGeneratorVersion(cue) {
+		t.Error("a different generator version must compare equal")
+	}
+	renamed := strings.Replace(string(cue), `"docuconf-cobol"`, `"other"`, 1)
+	if renamed == string(cue) || withoutGeneratorVersion([]byte(renamed)) == withoutGeneratorVersion(cue) {
+		t.Error("any other difference must still fail")
 	}
 }
 
@@ -65,7 +86,7 @@ func TestExampleUpToDate(t *testing.T) {
 	cue, loader := generate(t, filepath.Join(dir, "orders-config.cpy"), Options{})
 	for name, got := range map[string][]byte{"contract.cue": cue, "ORDCFG.cbl": loader} {
 		want, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil || string(want) != string(got) {
+		if err != nil || withoutGeneratorVersion(want) != withoutGeneratorVersion(got) {
 			t.Errorf("examples/orders/%s is out of date; run docuconf-cobol generate examples/orders/orders-config.cpy", name)
 		}
 	}

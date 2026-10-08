@@ -10,7 +10,7 @@ import (
 )
 
 // Version is the docuconf-cobol version recorded in contracts.
-const Version = "0.1.0"
+const Version = "0.1.0" // x-release-please-version
 
 // ContractJSON returns the contract document.
 func (c *Config) ContractJSON() ([]byte, error) {
