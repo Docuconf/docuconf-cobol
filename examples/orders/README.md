@@ -48,6 +48,14 @@ wrote ORDCFG.cbl
 
 Commit both. CI runs `docuconf-cobol generate -check`, which fails when they no longer match the copybook.
 
+**Generated docs.** [`CONFIG.md`](CONFIG.md), the reference for developers, and [`CONFIG.agents.md`](CONFIG.agents.md), the rules and facts AI agents need, are generated from `contract.cue` by the `docuconf` CLI, through the docs model in [`docs.json`](docs.json). Never edit them by hand; regenerate them after generating the contract (CI fails if they are out of date):
+
+```sh
+docuconf docs contract.cue -o CONFIG.md
+docuconf docs contract.cue --format agents -o CONFIG.agents.md
+docuconf docs contract.cue --format model -o docs.json
+```
+
 ## 3. CALL the loader
 
 ```cobol

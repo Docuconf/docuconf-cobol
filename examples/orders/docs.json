@@ -1,0 +1,445 @@
+{
+  "apiVersion": "docs.docuconf.dev/v1alpha1",
+  "kind": "ConfigDocs",
+  "service": {
+    "name": "orders-batch",
+    "generator": {
+      "language": "cobol",
+      "sdk": "docuconf-cobol",
+      "version": "0.1.0"
+    }
+  },
+  "groups": [
+    {
+      "name": "",
+      "title": "General",
+      "inputs": [
+        {
+          "name": "ALLOWED_ORIGINS",
+          "kind": "var",
+          "type": "list",
+          "typeLabel": "list of strings",
+          "required": false,
+          "secret": false,
+          "description": "Origins whose orders the job accepts",
+          "default": [
+            "http://localhost:3000"
+          ],
+          "defaultEnv": [
+            {
+              "name": "ALLOWED_ORIGINS",
+              "value": "http://localhost:3000"
+            }
+          ],
+          "wire": {
+            "encoding": "csv",
+            "separator": ",",
+            "text": "the items joined by `,` with nothing around it, such as `a,b`",
+            "platform": "a list of strings, such as `[a, b]`; docuconf writes it in the wire format"
+          },
+          "constraints": [
+            {
+              "rule": "itemCount",
+              "params": {
+                "maxItems": 8,
+                "minItems": 1
+              },
+              "text": "between 1 and 8 items"
+            },
+            {
+              "rule": "itemLength",
+              "params": {
+                "itemMaxLength": 64
+              },
+              "text": "each item at most 64 characters (Unicode code points)"
+            }
+          ],
+          "sources": [
+            {
+              "kind": "literal",
+              "text": "a literal value in the platform's values file"
+            },
+            {
+              "kind": "injected",
+              "text": "supplied when the container starts by an injector (`injected`), such as Bank-Vaults, `op run` or the Vault Agent injector; checked at boot"
+            }
+          ],
+          "errors": [
+            "invalid_type",
+            "out_of_range",
+            "too_few_items",
+            "too_many_items"
+          ]
+        },
+        {
+          "name": "DATABASE_URL",
+          "kind": "var",
+          "type": "url",
+          "typeLabel": "URL",
+          "required": true,
+          "secret": true,
+          "description": "Postgres connection string of the orders database",
+          "wire": {
+            "text": "an absolute URL, `scheme://...`, as is",
+            "platform": "a `secretKeyRef` or `injected` reference, never the value"
+          },
+          "constraints": [
+            {
+              "rule": "length",
+              "params": {
+                "maxLength": 200
+              },
+              "text": "at most 200 characters (Unicode code points)"
+            },
+            {
+              "rule": "schemes",
+              "params": {
+                "schemes": [
+                  "postgres"
+                ]
+              },
+              "text": "`postgres` URL"
+            }
+          ],
+          "sources": [
+            {
+              "kind": "secretKeyRef",
+              "text": "a key of a Kubernetes Secret (`secretKeyRef`)"
+            },
+            {
+              "kind": "injected",
+              "text": "supplied when the container starts by an injector (`injected`), such as Bank-Vaults, `op run` or the Vault Agent injector; checked at boot"
+            }
+          ],
+          "errors": [
+            "missing_required",
+            "invalid_type",
+            "out_of_range",
+            "invalid_scheme"
+          ]
+        },
+        {
+          "name": "LOG_LEVEL",
+          "kind": "var",
+          "type": "enum",
+          "typeLabel": "enum",
+          "required": false,
+          "secret": false,
+          "description": "Log verbosity",
+          "default": "info",
+          "defaultEnv": [
+            {
+              "name": "LOG_LEVEL",
+              "value": "info"
+            }
+          ],
+          "wire": {
+            "text": "one of the values, exactly as listed",
+            "platform": "a string"
+          },
+          "constraints": [
+            {
+              "rule": "values",
+              "params": {
+                "values": [
+                  "debug",
+                  "info",
+                  "warn",
+                  "error"
+                ]
+              },
+              "text": "one of `debug`, `info`, `warn` or `error`"
+            }
+          ],
+          "sources": [
+            {
+              "kind": "literal",
+              "text": "a literal value in the platform's values file"
+            },
+            {
+              "kind": "configMapKeyRef",
+              "text": "a key of a ConfigMap (`configMapKeyRef`), checked at boot"
+            },
+            {
+              "kind": "injected",
+              "text": "supplied when the container starts by an injector (`injected`), such as Bank-Vaults, `op run` or the Vault Agent injector; checked at boot"
+            }
+          ],
+          "errors": [
+            "not_in_enum"
+          ]
+        },
+        {
+          "name": "PORT",
+          "kind": "var",
+          "type": "int",
+          "typeLabel": "integer",
+          "required": false,
+          "secret": false,
+          "description": "Port of the Prometheus metrics endpoint",
+          "default": 8080,
+          "defaultEnv": [
+            {
+              "name": "PORT",
+              "value": "8080"
+            }
+          ],
+          "wire": {
+            "text": "a base-10 integer with no leading `+` or zeros, such as `8080`",
+            "platform": "an integer"
+          },
+          "constraints": [
+            {
+              "rule": "range",
+              "params": {
+                "max": 65535,
+                "min": 1
+              },
+              "text": "between 1 and 65535"
+            }
+          ],
+          "sources": [
+            {
+              "kind": "literal",
+              "text": "a literal value in the platform's values file"
+            },
+            {
+              "kind": "configMapKeyRef",
+              "text": "a key of a ConfigMap (`configMapKeyRef`), checked at boot"
+            },
+            {
+              "kind": "resourceFieldRef",
+              "text": "a container resource limit or request (`resourceFieldRef`), such as `limits.memory`"
+            },
+            {
+              "kind": "injected",
+              "text": "supplied when the container starts by an injector (`injected`), such as Bank-Vaults, `op run` or the Vault Agent injector; checked at boot"
+            }
+          ],
+          "errors": [
+            "invalid_type",
+            "out_of_range"
+          ]
+        },
+        {
+          "name": "REQUEST_TIMEOUT",
+          "kind": "var",
+          "type": "duration",
+          "typeLabel": "duration",
+          "required": false,
+          "secret": false,
+          "description": "Time allowed for each database call, in milliseconds",
+          "default": "30s",
+          "defaultEnv": [
+            {
+              "name": "REQUEST_TIMEOUT",
+              "value": "30s"
+            }
+          ],
+          "wire": {
+            "encoding": "go",
+            "text": "a Go duration, such as `1m30s` (units `h`, `m`, `s`, `ms`, `us`, `ns`)",
+            "platform": "a duration in Go syntax, such as `90s` or `1m30s`; docuconf writes it in the wire format"
+          },
+          "constraints": [
+            {
+              "rule": "range",
+              "params": {
+                "max": "5m",
+                "min": "1s"
+              },
+              "text": "between 1s and 5m"
+            }
+          ],
+          "sources": [
+            {
+              "kind": "literal",
+              "text": "a literal value in the platform's values file"
+            },
+            {
+              "kind": "configMapKeyRef",
+              "text": "a key of a ConfigMap (`configMapKeyRef`), checked at boot"
+            },
+            {
+              "kind": "injected",
+              "text": "supplied when the container starts by an injector (`injected`), such as Bank-Vaults, `op run` or the Vault Agent injector; checked at boot"
+            }
+          ],
+          "errors": [
+            "invalid_type",
+            "out_of_range"
+          ]
+        },
+        {
+          "name": "WORKER_COUNT",
+          "kind": "var",
+          "type": "int",
+          "typeLabel": "integer",
+          "required": false,
+          "secret": false,
+          "description": "Number of workers that share the input",
+          "details": "Each worker reads its share of the orders file and holds\none database connection, so keep this at or below the\npool size:\n\n- one connection per worker;\n- plus one for the summary step.",
+          "default": 4,
+          "defaultEnv": [
+            {
+              "name": "WORKER_COUNT",
+              "value": "4"
+            }
+          ],
+          "wire": {
+            "text": "a base-10 integer with no leading `+` or zeros, such as `8080`",
+            "platform": "an integer"
+          },
+          "constraints": [
+            {
+              "rule": "range",
+              "params": {
+                "max": 64,
+                "min": 1
+              },
+              "text": "between 1 and 64"
+            }
+          ],
+          "sources": [
+            {
+              "kind": "literal",
+              "text": "a literal value in the platform's values file"
+            },
+            {
+              "kind": "configMapKeyRef",
+              "text": "a key of a ConfigMap (`configMapKeyRef`), checked at boot"
+            },
+            {
+              "kind": "resourceFieldRef",
+              "text": "a container resource limit or request (`resourceFieldRef`), such as `limits.memory`"
+            },
+            {
+              "kind": "injected",
+              "text": "supplied when the container starts by an injector (`injected`), such as Bank-Vaults, `op run` or the Vault Agent injector; checked at boot"
+            }
+          ],
+          "errors": [
+            "invalid_type",
+            "out_of_range"
+          ]
+        },
+        {
+          "name": "orders",
+          "kind": "file",
+          "type": "text",
+          "typeLabel": "text file",
+          "required": true,
+          "secret": false,
+          "description": "The orders to summarise, one per line",
+          "file": {
+            "path": "/data/orders.txt",
+            "pathEnv": "ORDERS_FILE",
+            "reload": "restart",
+            "maxSize": 1048576,
+            "contents": "a UTF-8 text file",
+            "reloadText": "the app reads the file at startup; a changed source needs a rollout"
+          },
+          "constraints": [
+            {
+              "rule": "maxSize",
+              "params": {
+                "maxSize": 1048576
+              },
+              "text": "at most 1 MiB (1048576 bytes)"
+            }
+          ],
+          "sources": [
+            {
+              "kind": "inline",
+              "text": "content in the platform repository (`inline`), rendered as a content-hashed ConfigMap"
+            },
+            {
+              "kind": "configMap",
+              "text": "a ConfigMap (`configMap`), one key per file"
+            },
+            {
+              "kind": "secret",
+              "text": "a Kubernetes Secret (`secret`), one key per file"
+            },
+            {
+              "kind": "csi",
+              "text": "the Secrets Store CSI driver (`csi`)"
+            },
+            {
+              "kind": "image",
+              "text": "an OCI image volume (`image`), for content too large for a ConfigMap"
+            },
+            {
+              "kind": "injected",
+              "note": "the injector writes the file at the path",
+              "text": "supplied when the container starts by an injector (`injected`), such as Bank-Vaults, `op run` or the Vault Agent injector; checked at boot"
+            }
+          ],
+          "errors": [
+            "file_missing",
+            "file_unreadable",
+            "file_too_large",
+            "file_malformed"
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": "missing_required",
+      "meaning": "A required input is not set, and has no default.",
+      "fix": "Set it through one of its allowed sources."
+    },
+    {
+      "code": "invalid_type",
+      "meaning": "The value does not parse as the input's type in its wire format, or a secret still holds an unresolved injector reference (`vault:`, `op://`, `ref+`).",
+      "fix": "Write the value in the input's wire format. For an injected secret, make sure the injector runs."
+    },
+    {
+      "code": "out_of_range",
+      "meaning": "A number, duration, length or list item is outside the input's bounds.",
+      "fix": "Use a value within the input's constraints."
+    },
+    {
+      "code": "not_in_enum",
+      "meaning": "The value is not one of the allowed values.",
+      "fix": "Use one of the listed values, spelled exactly as listed."
+    },
+    {
+      "code": "invalid_scheme",
+      "meaning": "The URL's scheme is not one of the allowed schemes.",
+      "fix": "Use a URL with an allowed scheme."
+    },
+    {
+      "code": "too_few_items",
+      "meaning": "The list has fewer items than its minimum.",
+      "fix": "Add items."
+    },
+    {
+      "code": "too_many_items",
+      "meaning": "The list has more items than its maximum.",
+      "fix": "Remove items."
+    },
+    {
+      "code": "file_missing",
+      "meaning": "The file is not at its path.",
+      "fix": "Give the input a source, and check that it is mounted at the declared path (or that its path variable points at it)."
+    },
+    {
+      "code": "file_unreadable",
+      "meaning": "The file exists but cannot be read.",
+      "fix": "Check the mount, the file mode and the user the app runs as."
+    },
+    {
+      "code": "file_too_large",
+      "meaning": "The file is larger than its maximum size.",
+      "fix": "Shrink the content, or raise `maxSize` in the app's declaration."
+    },
+    {
+      "code": "file_malformed",
+      "meaning": "The file does not parse in its format, is a directory, is not UTF-8 text, or holds too few certificates.",
+      "fix": "Fix the content so it parses in the declared format."
+    }
+  ]
+}

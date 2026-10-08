@@ -78,6 +78,17 @@ jobs:
           mkdir "$mod/orders"
           cp examples/orders/contract.cue "$mod/orders/"
           cd "$mod" && cue vet -c ./orders
+      # CONFIG.md, CONFIG.agents.md and docs.json are generated from the
+      # committed contract.cue. "Generated files are up to date" regenerates
+      # it in place, so restore it first: a release's
+      # metadata.generator.version bump must stay in all four files.
+      - name: Generated docs are up to date
+        working-directory: examples/orders
+        run: |
+          git checkout -- contract.cue
+          docuconf docs contract.cue --check CONFIG.md
+          docuconf docs contract.cue --format agents --check CONFIG.agents.md
+          docuconf docs contract.cue --format model --check docs.json
       - name: Example smoke test
         env:
           DOCUCONF: ${{ runner.temp }}/bin/docuconf
