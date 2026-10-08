@@ -24,6 +24,13 @@
       *> @unit ms  @min 1s  @max 5m  @default 30s
            05  CFG-REQUEST-TIMEOUT     PIC 9(6).
       *> Number of workers that share the input
+      *>
+      *> Each worker reads its share of the orders file and holds
+      *> one database connection, so keep this at or below the
+      *> pool size:
+      *>
+      *> - one connection per worker;
+      *> - plus one for the summary step.
       *> @min 1  @max 64  @default 4
            05  CFG-WORKER-COUNT        PIC 9(2).
       *> The orders to summarise, one per line

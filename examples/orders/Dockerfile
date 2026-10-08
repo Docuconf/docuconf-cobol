@@ -7,7 +7,7 @@
 # length limits); when a release exists, copy its binary instead and drop
 # this stage.
 FROM golang:1.25 AS docuconf
-ARG DOCUCONF_VERSION=v0.0.0-20261007225926-e9554f671c32
+ARG DOCUCONF_VERSION=v0.0.0-20261008010717-a84031e0174b
 RUN CGO_ENABLED=0 go install github.com/docuconf/docuconf-go/cmd/docuconf@${DOCUCONF_VERSION}
 
 # The COBOL program and its generated loader, compiled with GnuCOBOL.
