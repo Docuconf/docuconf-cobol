@@ -46,6 +46,9 @@ type Comment struct {
 	Line   int
 	Text   string
 	Inline bool // a *> comment after code on the entry's line
+	// Raw is the text with its indentation kept (only trailing spaces
+	// removed), for details, where indentation can matter (SPEC §4.2).
+	Raw string
 }
 
 // Entry is one data description entry.
@@ -208,7 +211,7 @@ func splitLines(file, src string, format Format) ([]line, []Warning, error) {
 			case '*', '/':
 				t := raw[7:end]
 				t = strings.TrimPrefix(t, ">")
-				out = append(out, line{n: n, comment: &Comment{Line: n, Text: strings.TrimSpace(t)}})
+				out = append(out, line{n: n, comment: &Comment{Line: n, Text: strings.TrimSpace(t), Raw: strings.TrimRight(t, " ")}})
 				continue
 			case 'D', 'd':
 				out = append(out, line{n: n, blank: true})
@@ -224,7 +227,7 @@ func splitLines(file, src string, format Format) ([]line, []Warning, error) {
 			text = raw
 			t := strings.TrimSpace(text)
 			if strings.HasPrefix(t, "*>") {
-				out = append(out, line{n: n, comment: &Comment{Line: n, Text: strings.TrimSpace(t[2:])}})
+				out = append(out, line{n: n, comment: &Comment{Line: n, Text: strings.TrimSpace(t[2:]), Raw: strings.TrimRight(t[2:], " ")}})
 				continue
 			}
 			if strings.HasPrefix(t, ">>") {

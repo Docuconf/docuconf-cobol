@@ -24,3 +24,5 @@ configMaps: []
 restartTriggers:
   - kind: ConfigMap
     name: orders-input
+podAnnotations: {}
+podLabels: {}
