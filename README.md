@@ -13,7 +13,7 @@ You need Go 1.25 or later and GnuCOBOL 3 (`apt-get install gnucobol3`). Until th
 go install github.com/docuconf/docuconf-cobol/cmd/docuconf-cobol@latest
 # docuconf exec is not in a docuconf-go release yet. This is the commit
 # this SDK is tested against (go.mod pins the same one):
-go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261007225926-e9554f671c32
+go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261008010717-a84031e0174b
 ```
 
 Once docuconf-go tags a release that includes `docuconf exec`, use that version instead of the commit.
@@ -22,7 +22,7 @@ From the first release on, each tag also publishes the generator as release bina
 
 ## 2. Declare: annotate the copybook
 
-The record your program already uses is the declaration. A comment line above a field is its description, and `@` tags add what the PIC clause cannot say. This is [`examples/orders/orders-config.cpy`](examples/orders/orders-config.cpy):
+The record your program already uses is the declaration. The comment above a field is its description (its first paragraph) and details (the rest), and `@` tags add what the PIC clause cannot say. This is [`examples/orders/orders-config.cpy`](examples/orders/orders-config.cpy):
 
 ```cobol
       *> Configuration of the ORDERS-BATCH job, read from the
@@ -134,7 +134,41 @@ The loader's problems look like the other SDKs': a `docuconf: N configuration pr
 
 ### Annotations
 
-Annotations are comment lines directly above an item (`*>` anywhere, or `*` in column 7 of a fixed-format copybook). A comment line that does not start with `@` is the item's description; a line that starts with `@` holds tags, as many as fit. Tags may also follow text on a line, including an inline comment after the field: `05 CFG-PORT PIC 9(5).  *> Port number @default 80` is a description and a default. Only a known tag starts the tags, so `ops@example.com` in a description stays text. A value with spaces is quoted, with `""` for a quote, as in a COBOL literal. Tags are case-insensitive, and `@max-length`, `@maxLength` and `@maxlength` are the same tag. A misspelt tag is an error that suggests the right one. A blank line ends a comment block.
+Annotations are comment lines directly above an item (`*>` anywhere, or `*` in column 7 of a fixed-format copybook). A comment line that does not start with `@` is text; a line that starts with `@` holds tags, as many as fit. Tags may also follow text on a line, including an inline comment after the field: `05 CFG-PORT PIC 9(5).  *> Port number @default 80` is a description and a default. Only a known tag starts the tags, so `ops@example.com` in a description stays text. A value with spaces is quoted, with `""` for a quote, as in a COBOL literal. Tags are case-insensitive, and `@max-length`, `@maxLength` and `@maxlength` are the same tag. A misspelt tag is an error that suggests the right one. A blank line ends a comment block.
+
+#### Descriptions and details
+
+The first paragraph of the text is the item's `description`, on one line; every input needs one, of at least 5 characters. An empty comment line (`*>` alone) ends a paragraph, and the text after the first paragraph is the item's `details`: CommonMark, for generated docs only, never read at runtime. COBOL has no doc comment syntax of its own, so the text is used as written, with its indentation, and Markdown such as lists, `code` and fenced code blocks (inside which a line starting with `@` is text, not a tag) works as in any Markdown file. Lines of punctuation only, such as `*> -----`, are dropped. `@desc` and `@details` set either explicitly. Details must not be blank and have at most 4000 characters (Unicode code points); `generate` fails otherwise, as it does for a missing description. From the example:
+
+```cobol
+      *> Number of workers that share the input
+      *>
+      *> Each worker reads its share of the orders file and holds
+      *> one database connection, so keep this at or below the
+      *> pool size:
+      *>
+      *> - one connection per worker;
+      *> - plus one for the summary step.
+      *> @min 1  @max 64  @default 4
+           05  CFG-WORKER-COUNT        PIC 9(2).
+```
+
+`docuconf docs` (in the [docuconf CLI](https://github.com/docuconf/docuconf-go)) generates CONFIG.md and CONFIG.agents.md from the exported contract, with the details under each input:
+
+```sh
+docuconf docs contract.cue -o CONFIG.md
+docuconf docs contract.cue --format agents -o CONFIG.agents.md
+grep -A5 'Each worker reads' CONFIG.md
+```
+
+```text
+Each worker reads its share of the orders file and holds
+one database connection, so keep this at or below the
+pool size:
+
+- one connection per worker;
+- plus one for the summary step.
+```
 
 | Where | Tag | Meaning |
 |---|---|---|
@@ -144,7 +178,8 @@ Annotations are comment lines directly above an item (`*>` anywhere, or `*` in c
 | | `@package <name>` | the CUE package of contract.cue |
 | group item | `@group <name>` | the contract `group` of every item under it |
 | any field | `@env <NAME>` | the variable name, instead of the derived one |
-| | `@desc "<text>"` | the description, instead of the comment text (at least 5 characters, as the spec requires) |
+| | `@desc "<text>"` | the description, instead of the comment's first paragraph (at least 5 characters, as the spec requires) |
+| | `@details "<text>"` | the details, instead of the comment after its first paragraph (CommonMark, at most 4000 characters) |
 | | `@type <type>` | `string`, `int`, `float`, `bool`, `duration`, `url`, `enum`, `json`, when the PIC does not say |
 | | `@required`, `@secret` | neither may have a default |
 | | `@default <value>...` | the default, one value, or one per item for a list. A `VALUE` clause with a literal is the default when there is no `@default` (`VALUE SPACES` or `ZEROS` only initialises); if both are given they must agree |
@@ -233,6 +268,6 @@ Without them the suite skips, unless `DOCUCONF_REQUIRE_CONFORMANCE=1`. `DOCUCONF
 
 ### Development
 
-`docuconf-cobol` imports `github.com/docuconf/docuconf-go` for `ContractCUE` (which checks a contract as the SDKs do and writes it in the standard layout) and its contract-first checks. Until those are in a docuconf-go release, `go.mod` pins a docuconf-go commit that has them (currently one that adds `maxLength` on url and json values and item lengths on string lists, and whose `exec` passes `-env-file` values and contract defaults to the program), by pseudo-version, with no `replace` directive. CI checks out the same commit to build the `docuconf` CLI and to read the spec and conformance cases.
+`docuconf-cobol` imports `github.com/docuconf/docuconf-go` for `ContractCUE` (which checks a contract as the SDKs do and writes it in the standard layout) and its contract-first checks. Until those are in a docuconf-go release, `go.mod` pins a docuconf-go commit that has them (currently one that adds `details` to inputs and the `docuconf docs` command, and whose `exec` passes `-env-file` values and contract defaults to the program), by pseudo-version, with no `replace` directive. CI checks out the same commit to build the `docuconf` CLI and to read the spec and conformance cases.
 
 The runtime the loader is built on is in [`copybooks/`](copybooks): `DCRTWS.cpy` (working storage) and `DCRTPD.cpy` (paragraphs: reading variables, parsing ints, floats, bools, durations, csv and JSON lists, applying `DOCUCONF_FILE_ROOT`, reporting problems).

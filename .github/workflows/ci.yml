@@ -56,8 +56,12 @@ jobs:
           test -z "$(gofmt -l cmd internal copybooks tests)"
           go build ./...
           go vet ./...
+      # Regenerates in place and compares with the committed files, ignoring
+      # only metadata.generator.version, which release PRs bump.
       - name: Generated files are up to date
-        run: go run ./cmd/docuconf-cobol generate -check examples/orders/orders-config.cpy
+        run: |
+          go run ./cmd/docuconf-cobol generate examples/orders/orders-config.cpy
+          scripts/check-generated.sh examples/orders
       - name: Generator, loader and conformance tests
         env:
           DOCUCONF: ${{ runner.temp }}/bin/docuconf

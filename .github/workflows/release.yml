@@ -6,6 +6,7 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,7 +35,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Re-runs reuse the release and replace the assets.
+          # release-please has usually created the release; re-runs replace the assets.
           if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             flags=()
             case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac

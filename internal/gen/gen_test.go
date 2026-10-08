@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -31,6 +32,14 @@ func generate(t *testing.T, path string, opts Options) (cue, loader []byte) {
 	return cue, loader
 }
 
+// generatorVersion matches the value of metadata.generator.version. It is
+// Version, which every release PR bumps, so golden comparisons ignore it.
+var generatorVersion = regexp.MustCompile(`(generator:\s*\{[^{}]*?\bversion:\s*)"[^"]*"`)
+
+func withoutGeneratorVersion(b []byte) string {
+	return generatorVersion.ReplaceAllString(string(b), `${1}"<generator-version>"`)
+}
+
 func golden(t *testing.T, path string, got []byte) {
 	t.Helper()
 	if *update {
@@ -42,8 +51,20 @@ func golden(t *testing.T, path string, got []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(want) != string(got) {
+	if withoutGeneratorVersion(want) != withoutGeneratorVersion(got) {
 		t.Errorf("%s differs; run go test ./internal/gen -update and review the diff", path)
+	}
+}
+
+func TestGoldenComparisonIgnoresOnlyTheGeneratorVersion(t *testing.T) {
+	cue, _ := generate(t, "testdata/all-types.cpy", Options{})
+	bumped := strings.Replace(string(cue), `"`+Version+`"`, `"99.0.0"`, 1)
+	if bumped == string(cue) || withoutGeneratorVersion([]byte(bumped)) != withoutGeneratorVersion(cue) {
+		t.Error("a different generator version must compare equal")
+	}
+	renamed := strings.Replace(string(cue), `"docuconf-cobol"`, `"other"`, 1)
+	if renamed == string(cue) || withoutGeneratorVersion([]byte(renamed)) == withoutGeneratorVersion(cue) {
+		t.Error("any other difference must still fail")
 	}
 }
 
@@ -65,7 +86,7 @@ func TestExampleUpToDate(t *testing.T) {
 	cue, loader := generate(t, filepath.Join(dir, "orders-config.cpy"), Options{})
 	for name, got := range map[string][]byte{"contract.cue": cue, "ORDCFG.cbl": loader} {
 		want, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil || string(want) != string(got) {
+		if err != nil || withoutGeneratorVersion(want) != withoutGeneratorVersion(got) {
 			t.Errorf("examples/orders/%s is out of date; run docuconf-cobol generate examples/orders/orders-config.cpy", name)
 		}
 	}
@@ -341,5 +362,90 @@ func TestRecords(t *testing.T) {
 	loader, _ = c.Loader()
 	if !strings.Contains(string(loader), "01  WS-CFG.") || !strings.Contains(string(loader), "       COPY DCRTWS.\n") || !strings.Contains(string(loader), "       COPY DCRTPD.\n") {
 		t.Errorf("loader:\n%s", loader)
+	}
+}
+
+// The first paragraph of the comment is the description, and the rest
+// the details (SPEC §4.2): CommonMark, written as is, with indentation
+// kept, after the description in the contract.
+func TestDetails(t *testing.T) {
+	src := "      *> @service demo  @prefix CFG-\n       01  DEMO-CONFIG.\n" +
+		"      *> Number of workers that share the input\n" +
+		"      *> on this node.\n" +
+		"      *>\n" +
+		"      *> Each worker holds a database connection, so keep it\n" +
+		"      *> at or below the pool size:\n" +
+		"      *>\n" +
+		"      *> - one connection per worker;\n" +
+		"      *>   - nested, *indented*;\n" +
+		"      *> - plus one for migrations.\n" +
+		"      *> ------------------------------------------------\n" +
+		"      *> ```sh\n" +
+		"      *> @min stays text inside a code block\n" +
+		"      *>   kubectl scale --replicas=2\n" +
+		"      *> ```\n" +
+		"      *>\n" +
+		"      *> # Grüße aus 東京\n" +
+		"      *> @min 1  @max 64  @default 4\n" +
+		"           05  CFG-WORKER-COUNT PIC 9(2).\n" +
+		"      *> HTTP listen port\n" +
+		"      *> @details \"Behind the mesh, keep the **default**.\"\n" +
+		"           05  CFG-PORT PIC 9(5).\n" +
+		"      *> Log level, one paragraph\n" +
+		"      *>\n" +
+		"           05  CFG-LEVEL PIC X(5).\n" +
+		"      *> The orders to summarise\n" +
+		"      *>\n" +
+		"      *> One order per line, as `id,amount`.\n" +
+		"      *> @file orders text  @path /data/orders.txt\n" +
+		"           05  CFG-ORDERS-PATH PIC X(256).\n"
+	c, err := Build("demo.cpy", src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cue, err := c.ContractCUE()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"description: \"Number of workers that share the input on this node.\"\n\t\t\tdetails:     \"Each worker holds a database connection, so keep it\\nat or below the pool size:\\n\\n- one connection per worker;\\n  - nested, *indented*;\\n- plus one for migrations.\\n```sh\\n@min stays text inside a code block\\n  kubectl scale --replicas=2\\n```\\n\\n# Grüße aus 東京\"\n",
+		"description: \"HTTP listen port\"\n\t\t\tdetails:     \"Behind the mesh, keep the **default**.\"\n",
+		"description: \"The orders to summarise\"\n\t\t\tdetails:     \"One order per line, as `id,amount`.\"\n",
+		"description: \"Log level, one paragraph\"\n\t\t\tmaxLength:",
+	} {
+		if !strings.Contains(string(cue), want) {
+			t.Errorf("contract lacks %q:\n%s", want, cue)
+		}
+	}
+
+	// Details over 4000 characters, or blank, fail like a short
+	// description; 4000 characters pass.
+	long := func(lines int, extra string) string {
+		s := "      *> Number of workers\n      *>\n"
+		for i := 0; i < lines; i++ {
+			s += "      *> " + strings.Repeat("日本", 10) + "\n" // 20 characters a line
+		}
+		return s + "      *> " + extra + "\n           05  CFG-WORKERS PIC 9(2).\n"
+	}
+	head := "      *> @service demo  @prefix CFG-\n       01  DEMO-CONFIG.\n"
+	// 190 lines of 20 characters, 190 newlines and 10 characters: 4000.
+	if _, err := Build("demo.cpy", head+long(190, strings.Repeat("日本", 5)), Options{}); err != nil {
+		t.Errorf("4000 characters: %v", err)
+	}
+	_, err = Build("demo.cpy", head+long(190, strings.Repeat("日本", 5)+"日"), Options{})
+	if err == nil || !strings.Contains(err.Error(), "demo.cpy:196: CFG-WORKERS: details are 4001 characters (the comment after its first paragraph, or @details); details may have at most 4000") {
+		t.Errorf("4001 characters: %v", err)
+	}
+	_, err = Build("demo.cpy", head+"      *> Number of workers\n      *> @details \"  \"\n           05  CFG-WORKERS PIC 9(2).\n", Options{})
+	if err == nil || !strings.Contains(err.Error(), "CFG-WORKERS: @details must not be blank") {
+		t.Errorf("blank details: %v", err)
+	}
+	_, err = Build("demo.cpy", head+"      *>\n      *> Each worker holds a connection.\n           05  CFG-WORKERS PIC 9(2).\n", Options{})
+	if err != nil {
+		t.Errorf("a leading empty line: %v", err)
+	}
+	_, err = Build("demo.cpy", head+"      *> @details \"Without a description.\"\n           05  CFG-WORKERS PIC 9(2).\n", Options{})
+	if err == nil || !strings.Contains(err.Error(), "CFG-WORKERS: needs a description") {
+		t.Errorf("details without a description: %v", err)
 	}
 }

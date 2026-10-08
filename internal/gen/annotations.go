@@ -18,21 +18,44 @@ type tag struct {
 
 // doc is what the comment block above an entry says.
 type doc struct {
-	text []string // description lines
-	tags []tag
+	// lines is the comment's text without its tags, with indentation
+	// kept; "" separates paragraphs. Its first paragraph is the
+	// description and the rest the details (see description, details).
+	lines []string
+	tags  []tag
 }
 
 // normTag lets @max-length, @maxLength and @maxlength mean the same.
 func normTag(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "")) }
 
-// parseDoc splits comment lines into description text and tags. A line
-// starting with @ holds tags; any other line is description, except a
-// line of punctuation only (a separator such as *> -----).
+// parseDoc splits comment lines into text and tags. A line starting with
+// @ holds tags; any other line is text, except a line of punctuation only
+// (a separator such as *> -----). An empty comment line (*>) ends a
+// paragraph. Inside a fenced code block (``` or ~~~), every line is text.
 func parseDoc(comments []copybook.Comment) (doc, error) {
 	var d doc
+	fence := ""
 	for _, c := range comments {
 		t := strings.TrimSpace(c.Text)
-		if t == "" || strings.Trim(t, "-=*_#~+. ") == "" {
+		raw := c.Raw
+		if raw == "" {
+			raw = t
+		}
+		if fence != "" || strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			switch {
+			case fence == "":
+				fence = t[:3]
+			case strings.HasPrefix(t, fence) && strings.Trim(t, fence[:1]) == "":
+				fence = ""
+			}
+			d.lines = append(d.lines, raw)
+			continue
+		}
+		if t == "" {
+			d.lines = append(d.lines, "")
+			continue
+		}
+		if strings.Trim(t, "-=*_#~+. ") == "" {
 			continue
 		}
 		if !strings.HasPrefix(t, "@") {
@@ -40,11 +63,11 @@ func parseDoc(comments []copybook.Comment) (doc, error) {
 			// comment: "*> port number @default 80".
 			at := tagStart(t)
 			if at < 0 {
-				d.text = append(d.text, t)
+				d.lines = append(d.lines, raw)
 				continue
 			}
 			if desc := strings.TrimSpace(t[:at]); desc != "" {
-				d.text = append(d.text, desc)
+				d.lines = append(d.lines, desc)
 			}
 			t = t[at:]
 		}
@@ -133,7 +156,7 @@ var allTags = slices.Concat(recordTags, knownVarTags, knownFileTags, []string{"i
 // tagSpelling is how the README spells each tag, for suggestions.
 var tagSpelling = func() map[string]string {
 	m := map[string]string{}
-	for _, t := range []string{"service", "program", "package", "prefix", "env", "desc", "type", "secret",
+	for _, t := range []string{"service", "program", "package", "prefix", "env", "desc", "details", "type", "secret",
 		"required", "default", "min", "max", "min-length", "max-length", "pattern", "schemes", "values",
 		"min-items", "max-items", "item-min", "item-max", "encoding", "separator", "unit", "count", "present",
 		"examples", "deprecated", "group", "schema", "config-key", "ignore", "file", "path", "path-env",
@@ -200,9 +223,77 @@ func (d doc) get(name string) (tag, bool) {
 
 func (d doc) has(name string) bool { _, ok := d.get(name); return ok }
 
+// paragraphs returns the comment text, unindented and without blank lines
+// at either end, and the index of the line that ends its first paragraph.
+func (d doc) paragraphs() ([]string, int) {
+	indent := -1
+	for _, l := range d.lines {
+		if strings.TrimSpace(l) != "" {
+			if n := len(l) - len(strings.TrimLeft(l, " ")); indent < 0 || n < indent {
+				indent = n
+			}
+		}
+	}
+	var lines []string
+	for _, l := range d.lines {
+		if strings.TrimSpace(l) == "" {
+			if len(lines) > 0 && lines[len(lines)-1] != "" {
+				lines = append(lines, "")
+			}
+			continue
+		}
+		lines = append(lines, l[indent:])
+	}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	end := slices.Index(lines, "")
+	if end < 0 {
+		end = len(lines)
+	}
+	return lines, end
+}
+
+// description is @desc, or the first paragraph of the comment on one
+// line.
 func (d doc) description() string {
 	if t, ok := d.get("desc"); ok {
 		return strings.Join(t.values, " ")
 	}
-	return strings.Join(d.text, " ")
+	lines, end := d.paragraphs()
+	var words []string
+	for _, l := range lines[:end] {
+		words = append(words, strings.Fields(l)...)
+	}
+	return strings.Join(words, " ")
+}
+
+// details is @details, or the comment after its first paragraph, as
+// CommonMark (SPEC §4.2): docs only, never read at runtime. COBOL has no
+// doc comment syntax of its own, so the text is used as written. ok is
+// false when there are none.
+func (d doc) details() (string, bool) {
+	if t, ok := d.get("details"); ok {
+		return strings.Join(t.values, " "), true
+	}
+	lines, end := d.paragraphs()
+	if end >= len(lines) {
+		return "", false
+	}
+	return strings.Join(lines[end+1:], "\n"), true
+}
+
+// maxDetails is the most characters (Unicode code points) details may
+// have (SPEC §4.2).
+const maxDetails = 4000
+
+// checkDetails reports details that are blank or too long, as the
+// contract's #Details does.
+func checkDetails(details string, fail func(string, ...any)) {
+	switch n := len([]rune(details)); {
+	case strings.TrimSpace(details) == "":
+		fail("@details must not be blank")
+	case n > maxDetails:
+		fail("details are %d characters (the comment after its first paragraph, or @details); details may have at most %d, as the docuconf spec requires (SPEC §4.2)", n, maxDetails)
+	}
 }

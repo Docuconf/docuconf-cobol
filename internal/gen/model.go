@@ -495,7 +495,7 @@ func (b *builder) item(e *copybook.Entry, group string) {
 }
 
 // known lists the tags a variable may carry, by normalised name.
-var knownVarTags = []string{"env", "desc", "type", "secret", "required", "default", "min", "max",
+var knownVarTags = []string{"env", "desc", "details", "type", "secret", "required", "default", "min", "max",
 	"minlength", "maxlength", "pattern", "schemes", "values", "minitems", "maxitems", "itemmin",
 	"itemmax", "itemminlength", "itemmaxlength", "encoding", "separator", "unit", "count", "present",
 	"examples", "deprecated", "group", "schema", "configkey"}
@@ -548,6 +548,10 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	}
 	v.Required, v.Secret = flag("required"), flag("secret")
 	o := map[string]any{"description": desc}
+	if details, ok := d.details(); ok {
+		checkDetails(details, fail)
+		o["details"] = details
+	}
 	if v.Required {
 		o["required"] = true
 	}
@@ -637,7 +641,7 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 			allowed[t] = true
 		}
 	}
-	allow("env", "desc", "type", "secret", "required", "default", "examples", "deprecated", "group", "present", "configkey")
+	allow("env", "desc", "details", "type", "secret", "required", "default", "examples", "deprecated", "group", "present", "configkey")
 
 	// Presence flag.
 	if f, ok := single("present"); ok {
@@ -1195,7 +1199,7 @@ func valueDefault(e *copybook.Entry, v *Var) ([]string, bool, error) {
 	return []string{text}, true, nil
 }
 
-var knownFileTags = []string{"file", "type", "desc", "required", "secret", "path", "pathenv", "reload",
+var knownFileTags = []string{"file", "type", "desc", "details", "required", "secret", "path", "pathenv", "reload",
 	"maxsize", "group", "deprecated", "format", "schema", "dnsnames", "keyalgorithms", "minremaining",
 	"requireca", "mincertificates", "passwordvar", "pattern", "minlength", "maxlength"}
 
@@ -1264,6 +1268,10 @@ func (b *builder) file(e *copybook.Entry, d doc, group string) {
 		fail("needs a description of at least 5 characters, as the docuconf spec requires of every input (SPEC §4.2): write a comment line above it, or @desc")
 	}
 	o := map[string]any{"type": f.Type, "description": desc}
+	if details, ok := d.details(); ok {
+		checkDetails(details, fail)
+		o["details"] = details
+	}
 	if d.has("required") {
 		o["required"] = true
 	}

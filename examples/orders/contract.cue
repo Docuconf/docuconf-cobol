@@ -58,6 +58,7 @@ contract.#Contract & {
 		WORKER_COUNT: {
 			type:        "int"
 			description: "Number of workers that share the input"
+			details:     "Each worker reads its share of the orders file and holds\none database connection, so keep this at or below the\npool size:\n\n- one connection per worker;\n- plus one for the summary step."
 			default:     4
 			min:         1
 			max:         64

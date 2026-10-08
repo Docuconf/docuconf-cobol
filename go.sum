@@ -2,8 +2,8 @@ github.com/caarlos0/env/v11 v11.4.1 h1:fYwH0sWEsBSMPG7t4e/PEfTFzrWrpjyygXyUnWiSw
 github.com/caarlos0/env/v11 v11.4.1/go.mod h1:qupehSf/Y0TUTsxKywqRt/vJjN5nz6vauiYEUUr8P4U=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/docuconf/docuconf-go v0.0.0-20261007225926-e9554f671c32 h1:bdpdAI2o58MyTukbxGL466GHsH+tySTGB91NVLF2zWU=
-github.com/docuconf/docuconf-go v0.0.0-20261007225926-e9554f671c32/go.mod h1:AwOGN7OM3S5unz/B4clT7qony8QNCp6vGcRiaCFjgbg=
+github.com/docuconf/docuconf-go v0.0.0-20261008010717-a84031e0174b h1:Vuf9/B7UUFWyjkg+R0W4nYczeO6vxaheHH+GgvE4IE0=
+github.com/docuconf/docuconf-go v0.0.0-20261008010717-a84031e0174b/go.mod h1:AwOGN7OM3S5unz/B4clT7qony8QNCp6vGcRiaCFjgbg=
 github.com/kr/pretty v0.2.1 h1:Fmg33tUaq4/8ym9TJN1x7sLJnHVwhP33CNkpYV/7rwI=
 github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfnI=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
