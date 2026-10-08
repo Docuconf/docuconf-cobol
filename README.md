@@ -7,7 +7,7 @@ The COBOL SDK for [docuconf](https://github.com/docuconf/docuconf-go): typed con
 
 ## 1. Install
 
-You need Go 1.25 or later and GnuCOBOL 3 (`apt-get install gnucobol3`). Nothing is published to a registry or a release page yet, so install both tools from source:
+You need Go 1.25 or later and GnuCOBOL 3 (`apt-get install gnucobol3`). Until the first release is tagged, install both tools from source:
 
 ```sh
 go install github.com/docuconf/docuconf-cobol/cmd/docuconf-cobol@latest
@@ -16,7 +16,9 @@ go install github.com/docuconf/docuconf-cobol/cmd/docuconf-cobol@latest
 go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261008010717-a84031e0174b
 ```
 
-Once docuconf-go tags a release that includes `docuconf exec`, use that version instead of the commit. The loader uses only standard COBOL plus `ACCEPT ... FROM ENVIRONMENT`, `FUNCTION TRIM` and `NUMVAL-F`.
+Once docuconf-go tags a release that includes `docuconf exec`, use that version instead of the commit.
+
+From the first release on, each tag also publishes the generator as release binaries with checksums (`SHA256SUMS`) on the GitHub releases page, and as an image, `ghcr.io/docuconf/docuconf-cobol` (linux/amd64, arm64 and s390x), holding one static binary at `/docuconf-cobol`: `COPY --from=ghcr.io/docuconf/docuconf-cobol:<version> /docuconf-cobol /usr/local/bin/docuconf-cobol`. The loader needs GnuCOBOL 3 either way; it uses only standard COBOL plus `ACCEPT ... FROM ENVIRONMENT`, `FUNCTION TRIM` and `NUMVAL-F`.
 
 ## 2. Declare: annotate the copybook
 
