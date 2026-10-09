@@ -222,6 +222,10 @@ func (c *Config) Loader() ([]byte, error) {
 		e.b.WriteByte('\n')
 		loadFile(e, paras[f.Field], f)
 	}
+	for _, g := range c.grammars() {
+		e.b.WriteByte('\n')
+		g.emit(e)
+	}
 	e.b.WriteByte('\n')
 	if c.Runtime == "copy" {
 		e.b.WriteString(area + "COPY DCRTPD.\n")
@@ -297,6 +301,9 @@ func (c *Config) checkNames(paras map[string]string) error {
 		reserved[m[1]] = "a paragraph of the loader's runtime (DCRTPD)"
 	}
 	reserved["DC-MAIN"] = "a paragraph of the loader"
+	for _, g := range grammars {
+		reserved[g.para] = "a paragraph of the loader"
+	}
 	for _, p := range paras {
 		reserved[p] = "a paragraph of the loader"
 	}
@@ -326,7 +333,7 @@ func (c *Config) loadVar(e *emitter, paras map[string]string, v *Var) {
 	e.comment(fmt.Sprintf("%s into %s", v.Env, v.Field))
 	e.para(paras[v.Field])
 	e.move(0, v.Env, "DC-NAME")
-	if v.Type == tList {
+	if v.isList() {
 		c.loadList(e, paras[v.Field+" ITEM"], v)
 		return
 	}
@@ -353,6 +360,7 @@ func (c *Config) loadVar(e *emitter, paras map[string]string, v *Var) {
 		}
 	}
 	e.line(0, "ELSE")
+	deprecationWarning(e, 1, v)
 	ind := 1
 	if v.Secret {
 		e.line(1, "PERFORM DC-CHECK-REF")
@@ -416,9 +424,25 @@ func durationValue(d string, unitNs int64) string {
 // names the field in messages.
 func storeScalar(e *emitter, ind int, v *Var, target, label string) {
 	typ := v.Type
-	if typ == tList {
+	if v.isList() {
 		typ = v.Items
 	}
+	// A value must have SPEC section 5's exact form for its type before
+	// it is converted: the conversions below are more lenient.
+	if g := grammarOf(v); g != nil {
+		e.line(ind, "PERFORM "+g.para)
+		e.line(ind, `IF DC-RX-OK = "N"`)
+		e.problem(ind+1, g.msg, "invalid_type")
+		e.line(ind, "ELSE")
+		storeTyped(e, ind+1, v, typ, target, label)
+		e.line(ind, "END-IF")
+		return
+	}
+	storeTyped(e, ind, v, typ, target, label)
+}
+
+// storeTyped converts DC-RAW(1:DC-LEN), of scalar type typ, into target.
+func storeTyped(e *emitter, ind int, v *Var, typ, target, label string) {
 	fits := fmt.Sprintf("does not fit in %s (%s)", label, picText(v))
 	switch typ {
 	case tString, tURL, tEnum, tJSON:
@@ -586,12 +610,28 @@ func valueChecks(e *emitter, ind int, v *Var, typ string) int {
 		ends++
 	}
 	lo, hi, what, minW, maxW := v.MinLen, v.MaxLen, "is", "minLength", "maxLength"
-	if v.Type == tList {
+	switch v.Type {
+	case tList:
 		lo, hi, what, minW, maxW = v.ItemMinLen, v.ItemMaxLen, "has an item", "itemMinLength", "itemMaxLength"
+	case tKeySet:
+		lo, hi, what, minW, maxW = v.ItemMinLen, v.ItemMaxLen, "has a key", "keyMinLength", "keyMaxLength"
 	}
 	if typ != tEnum && (lo != nil || hi != nil) {
 		e.line(ind, "ELSE")
 		e.line(ind, "PERFORM DC-COUNT-CHARS")
+		if v.Type == tKeySet {
+			// An empty key, a stray separator, is out of range whatever
+			// keyMinLength says.
+			e.line(ind, "IF DC-CHARS = 0")
+			e.problem(ind+1, "has an empty key", "out_of_range")
+			ends++
+			if *lo > 1 || hi != nil {
+				e.line(ind, "ELSE")
+			}
+			if *lo == 1 {
+				lo = nil
+			}
+		}
 		if lo != nil {
 			e.line(ind, fmt.Sprintf("IF DC-CHARS < %d", *lo))
 			e.problem(ind+1, fmt.Sprintf("%s shorter than %s %d characters", what, minW, *lo), "out_of_range")
@@ -699,6 +739,7 @@ func (c *Config) loadList(e *emitter, itemPara string, v *Var) {
 		e.line(1, fmt.Sprintf(`MOVE %q TO %s`, map[bool]string{true: "Y", false: "N"}[v.Default != nil], v.Present))
 	}
 	e.line(0, "ELSE")
+	deprecationWarning(e, 1, v)
 	split := 1
 	if v.Secret && v.Encoding != "indexed" {
 		e.line(1, "PERFORM DC-CHECK-REF")
@@ -730,14 +771,18 @@ func (c *Config) loadList(e *emitter, itemPara string, v *Var) {
 		e.line(1, "END-IF")
 	}
 	e.line(1, `IF DC-OK = "Y"`)
+	items, minW, maxW := "items", "minItems", "maxItems"
+	if v.Type == tKeySet {
+		items, minW, maxW = "keys", "minKeys", "maxKeys"
+	}
 	if v.MinItems > 0 {
 		e.line(2, fmt.Sprintf("IF DC-ITEM-COUNT < %d", v.MinItems))
-		e.problem(3, fmt.Sprintf("has too few items, below minItems %d", v.MinItems), "too_few_items")
+		e.problem(3, fmt.Sprintf("has too few %s, below %s %d", items, minW, v.MinItems), "too_few_items")
 		e.line(2, "END-IF")
 	}
 	if v.MaxItems > 0 {
 		e.line(2, fmt.Sprintf("IF DC-ITEM-COUNT > %d", v.MaxItems))
-		e.problem(3, fmt.Sprintf("has too many items, above maxItems %d", v.MaxItems), "too_many_items")
+		e.problem(3, fmt.Sprintf("has too many %s, above %s %d", items, maxW, v.MaxItems), "too_many_items")
 		e.line(2, "END-IF")
 	}
 	e.line(2, "PERFORM VARYING DC-K FROM 1 BY 1")
@@ -775,12 +820,15 @@ func loadFile(e *emitter, para string, f *FileInput) {
 	if f.PathEnv != "" {
 		e.move(0, f.PathEnv, "DC-NAME")
 		e.line(0, "PERFORM DC-GET-ENV")
+		e.line(0, `MOVE "Y" TO DC-FROM-ENV`)
 		e.line(0, `IF DC-SET = "N" OR DC-LEN = 0`)
+		e.line(1, `MOVE "N" TO DC-FROM-ENV`)
 		e.line(1, "MOVE SPACES TO DC-RAW")
 		e.move(1, f.Path, "DC-RAW")
 		e.line(1, fmt.Sprintf("MOVE %d TO DC-LEN", len(f.Path)))
 		e.line(0, "END-IF")
 	} else {
+		e.line(0, `MOVE "N" TO DC-FROM-ENV`)
 		e.line(0, "MOVE SPACES TO DC-RAW")
 		e.move(0, f.Path, "DC-RAW")
 		e.line(0, fmt.Sprintf("MOVE %d TO DC-LEN", len(f.Path)))
@@ -795,4 +843,111 @@ func loadFile(e *emitter, para string, f *FileInput) {
 	e.line(0, "ELSE")
 	e.line(1, "MOVE DC-RAW(1:DC-LEN) TO "+f.Field)
 	e.line(0, "END-IF.")
+}
+
+// deprecationWarning prints, when a deprecated variable is set, a
+// warning naming it and its message, never its value (SPEC section 4.2).
+// It is not a problem: the variable still loads and is still checked.
+func deprecationWarning(e *emitter, ind int, v *Var) {
+	if v.Deprecated == "" {
+		return
+	}
+	msg := "docuconf: warning: " + v.Env + " is deprecated"
+	if v.ReplacedBy != "" {
+		msg += " (replaced by " + v.ReplacedBy + ")"
+	}
+	e.display(ind, msg+": "+v.Deprecated)
+}
+
+// display writes DISPLAY text UPON SYSERR, splitting a long literal.
+func (e *emitter) display(ind int, text string) {
+	parts := chunks(text, width-len(stmt)-4*ind-12)
+	e.line(ind, "DISPLAY "+cobolLiteral(parts[0]))
+	for _, p := range parts[1:] {
+		e.line(ind, "    "+cobolLiteral(p))
+	}
+	e.line(ind, "    UPON SYSERR")
+	e.line(ind, "END-DISPLAY")
+}
+
+// A grammar is SPEC section 5's exact form of a type's wire value, which
+// a value must match before the loader converts it: NUMVAL and the
+// duration paragraphs accept more (spaces, .5, lower-case ISO 8601).
+// generate compiles it like a @pattern, and the loader holds one
+// paragraph per grammar its variables use.
+type grammar struct {
+	key, para, re, msg string
+}
+
+var grammars = []grammar{
+	{"bool", "DC-G-BOOL", `^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$`, "is not true or false"},
+	{"int", "DC-G-INT", `^[+-]?[0-9]+$`, "is not an integer"},
+	{"float", "DC-G-FLOAT", `^[+-]?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$`, "is not a number"},
+	{"go", "DC-G-GO", `^[+-]?(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`,
+		"is not a duration such as 1m30s"},
+	{"iso8601", "DC-G-ISO8601", isoGrammar(), "is not an ISO 8601 duration such as PT90S"},
+	{"seconds", "DC-G-SECONDS", `^[0-9]+(\.[0-9]+)?$`, "is not a number of seconds such as 90 or 1.5"},
+	{"timespan", "DC-G-TIMESPAN", `^([0-9]+\.)?([01]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,7})?$`,
+		"is not a duration of the form [d.]hh:mm:ss[.fff]"},
+}
+
+// isoGrammar is P[nD][T[nH][nM][nS]], with at least one component and,
+// after a T, at least one time component.
+func isoGrammar() string {
+	n := `[0-9]+([.,][0-9]+)?`
+	t := `T(` + n + `H(` + n + `M)?(` + n + `S)?|` + n + `M(` + n + `S)?|` + n + `S)`
+	return `^P(` + n + `D(` + t + `)?|` + t + `)$`
+}
+
+// grammarOf is the grammar v's values (or items) must match, or nil.
+func grammarOf(v *Var) *grammar {
+	typ := v.Type
+	if v.isList() {
+		typ = v.Items
+	}
+	key := typ
+	if typ == tDuration {
+		key = v.Encoding
+	}
+	for i := range grammars {
+		if grammars[i].key == key {
+			return &grammars[i]
+		}
+	}
+	return nil
+}
+
+// grammars returns the grammars the loader's variables use, in a fixed
+// order.
+func (c *Config) grammars() []*grammar {
+	used := map[string]bool{}
+	for _, v := range c.Vars {
+		if g := grammarOf(v); g != nil {
+			used[g.key] = true
+		}
+	}
+	var out []*grammar
+	for i := range grammars {
+		if used[grammars[i].key] {
+			out = append(out, &grammars[i])
+		}
+	}
+	return out
+}
+
+func (g *grammar) emit(e *emitter) {
+	prog, err := compileRE2(g.re)
+	if err != nil || prog == nil {
+		panic(fmt.Sprintf("grammar %s: %v", g.key, err))
+	}
+	e.comment(fmt.Sprintf("DC-RX-OK is \"Y\" when DC-RAW(1:DC-LEN) is a %s value", g.key))
+	e.comment("in the exact form SPEC section 5 gives it.")
+	e.para(g.para)
+	e.table(0, prog.insts, "DC-RX-PROG")
+	if prog.ranges != "" {
+		e.table(0, prog.ranges, "DC-RX-RANGES")
+	}
+	e.line(0, fmt.Sprintf("MOVE %d TO DC-RX-N", prog.n))
+	e.line(0, fmt.Sprintf("MOVE %d TO DC-RX-START", prog.start))
+	e.line(0, "PERFORM DC-RX-MATCH.")
 }

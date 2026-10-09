@@ -48,9 +48,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq gnucobol3 libssl-dev
           go install cuelang.org/go/cmd/cue@v0.17.1
+      # In a workspace with the SDK from the same commit: the CLI's own
+      # go.mod pins the SDK by version, which can lag behind the commit.
       - name: Build the docuconf CLI from docuconf-go
-        working-directory: docuconf-go/cmd/docuconf
-        run: go build -o "$RUNNER_TEMP/bin/docuconf" . && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        working-directory: docuconf-go
+        run: |
+          go work init . ./cmd/docuconf
+          (cd cmd/docuconf && go build -o "$RUNNER_TEMP/bin/docuconf" .)
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Build and vet the generator
         run: |
           test -z "$(gofmt -l cmd internal copybooks tests)"

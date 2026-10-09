@@ -30,6 +30,10 @@
        01  DC-WORK.
            05  DC-NAME             PIC X(64).
            05  DC-NAME-LEN         PIC 9(4) COMP-5.
+           05  DC-NAME-Z           PIC X(65).
+           05  DC-ENV-PTR          USAGE POINTER.
+           05  DC-ENV-LEN          PIC 9(9) COMP-5.
+           05  DC-C-OK             PIC X.
            05  DC-RAW              PIC X(8192).
            05  DC-LEN              PIC 9(5) COMP-5.
            05  DC-SET              PIC X.
@@ -61,6 +65,11 @@
            05  DC-PARTS            PIC 9(4) COMP-5.
            05  DC-PART             PIC X(64) OCCURS 4.
            05  DC-IN-TIME          PIC X.
+           05  DC-MAG              PIC S9(9) COMP-5.
+           05  DC-SIG              PIC X(40).
+           05  DC-SIG-LEN          PIC 9(4) COMP-5.
+           05  DC-INF-DIGITS       PIC X(40) VALUE
+               "1797693134862315807937289714053034150799".
            05  DC-HEX              PIC X(4).
            05  DC-CP               PIC 9(9) COMP-5.
            05  DC-CP2              PIC 9(9) COMP-5.
@@ -69,6 +78,10 @@
            05  DC-IDX-ED           PIC Z(4)9.
            05  DC-ROOT             PIC X(4096).
            05  DC-ROOT-LEN         PIC 9(5) COMP-5.
+           05  DC-FROM-ENV         PIC X.
+           05  DC-CROOT            PIC X(4096).
+           05  DC-CROOT-LEN        PIC 9(5) COMP-5.
+           05  DC-CBASE            PIC 9(5) COMP-5.
            05  DC-PATH             PIC X(8192).
            05  DC-ITEM-COUNT       PIC 9(5) COMP-5.
            05  DC-ITEM-LIMIT       PIC 9(5) COMP-5.
@@ -162,31 +175,38 @@
                INITIALIZE CFG-PORT
                MOVE 8080 TO CFG-PORT
            ELSE
-               PERFORM DC-PARSE-INT
-               IF DC-OK = "Y"
-                   IF DC-INT < 0
-                       MOVE "is negative, and CFG-PORT is unsigned"
-                         TO DC-MSG
-                       MOVE "out_of_range" TO DC-CODE
-                       PERFORM DC-PROBLEM
-                   ELSE
-                       COMPUTE CFG-PORT = DC-INT
-                           ON SIZE ERROR
-                               MOVE "does not fit in CFG-PORT (PIC "
-                                 & "9(5))"
-                                 TO DC-MSG
+               PERFORM DC-G-INT
+               IF DC-RX-OK = "N"
+                   MOVE "is not an integer" TO DC-MSG
+                   MOVE "invalid_type" TO DC-CODE
+                   PERFORM DC-PROBLEM
+               ELSE
+                   PERFORM DC-PARSE-INT
+                   IF DC-OK = "Y"
+                       IF DC-INT < 0
+                           MOVE "is negative, and CFG-PORT is unsigned"
+                             TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       ELSE
+                           COMPUTE CFG-PORT = DC-INT
+                               ON SIZE ERROR
+                                   MOVE "does not fit in CFG-PORT "
+                                     & "(PIC 9(5))"
+                                     TO DC-MSG
+                                   MOVE "out_of_range" TO DC-CODE
+                                   PERFORM DC-PROBLEM
+                           END-COMPUTE
+                           IF DC-OK = "Y" AND DC-INT < 1
+                               MOVE "is below min 1" TO DC-MSG
                                MOVE "out_of_range" TO DC-CODE
                                PERFORM DC-PROBLEM
-                       END-COMPUTE
-                       IF DC-OK = "Y" AND DC-INT < 1
-                           MOVE "is below min 1" TO DC-MSG
-                           MOVE "out_of_range" TO DC-CODE
-                           PERFORM DC-PROBLEM
-                       END-IF
-                       IF DC-OK = "Y" AND DC-INT > 65535
-                           MOVE "is above max 65535" TO DC-MSG
-                           MOVE "out_of_range" TO DC-CODE
-                           PERFORM DC-PROBLEM
+                           END-IF
+                           IF DC-OK = "Y" AND DC-INT > 65535
+                               MOVE "is above max 65535" TO DC-MSG
+                               MOVE "out_of_range" TO DC-CODE
+                               PERFORM DC-PROBLEM
+                           END-IF
                        END-IF
                    END-IF
                END-IF
@@ -344,43 +364,50 @@
                INITIALIZE CFG-REQUEST-TIMEOUT
                MOVE 30000 TO CFG-REQUEST-TIMEOUT
            ELSE
-               MOVE "go" TO DC-ENC
-               PERFORM DC-PARSE-DURATION
-               IF DC-OK = "Y"
-                   MOVE 1000000 TO DC-UNIT-NS
-                   COMPUTE DC-CHK = DC-NS / DC-UNIT-NS
-                   IF DC-CHK < 0
-                       MOVE "is negative, and CFG-REQUEST-TIMEOUT is "
-                         & "unsigned"
-                         TO DC-MSG
-                       MOVE "out_of_range" TO DC-CODE
-                       PERFORM DC-PROBLEM
-                   ELSE
-                       COMPUTE CFG-REQUEST-TIMEOUT = DC-CHK
-                           ON SIZE ERROR
-                               MOVE "does not fit in "
-                                 & "CFG-REQUEST-TIMEOUT (PIC 9(6))"
-                                 TO DC-MSG
-                               MOVE "out_of_range" TO DC-CODE
-                               PERFORM DC-PROBLEM
-                       END-COMPUTE
-                       IF DC-OK = "Y" AND CFG-REQUEST-TIMEOUT
-                           NOT = DC-CHK
-                           MOVE "is finer than the ms "
-                             & "CFG-REQUEST-TIMEOUT counts in"
+               PERFORM DC-G-GO
+               IF DC-RX-OK = "N"
+                   MOVE "is not a duration such as 1m30s" TO DC-MSG
+                   MOVE "invalid_type" TO DC-CODE
+                   PERFORM DC-PROBLEM
+               ELSE
+                   MOVE "go" TO DC-ENC
+                   PERFORM DC-PARSE-DURATION
+                   IF DC-OK = "Y"
+                       MOVE 1000000 TO DC-UNIT-NS
+                       COMPUTE DC-CHK = DC-NS / DC-UNIT-NS
+                       IF DC-CHK < 0
+                           MOVE "is negative, and CFG-REQUEST-TIMEOUT "
+                             & "is unsigned"
                              TO DC-MSG
                            MOVE "out_of_range" TO DC-CODE
                            PERFORM DC-PROBLEM
-                       END-IF
-                       IF DC-OK = "Y" AND DC-NS < 1000000000
-                           MOVE "is below min 1s" TO DC-MSG
-                           MOVE "out_of_range" TO DC-CODE
-                           PERFORM DC-PROBLEM
-                       END-IF
-                       IF DC-OK = "Y" AND DC-NS > 300000000000
-                           MOVE "is above max 5m" TO DC-MSG
-                           MOVE "out_of_range" TO DC-CODE
-                           PERFORM DC-PROBLEM
+                       ELSE
+                           COMPUTE CFG-REQUEST-TIMEOUT = DC-CHK
+                               ON SIZE ERROR
+                                   MOVE "does not fit in CFG-REQUEST-T"
+                                     & "IMEOUT (PIC 9(6))"
+                                     TO DC-MSG
+                                   MOVE "out_of_range" TO DC-CODE
+                                   PERFORM DC-PROBLEM
+                           END-COMPUTE
+                           IF DC-OK = "Y" AND CFG-REQUEST-TIMEOUT
+                               NOT = DC-CHK
+                               MOVE "is finer than the ms "
+                                 & "CFG-REQUEST-TIMEOUT counts in"
+                                 TO DC-MSG
+                               MOVE "out_of_range" TO DC-CODE
+                               PERFORM DC-PROBLEM
+                           END-IF
+                           IF DC-OK = "Y" AND DC-NS < 1000000000
+                               MOVE "is below min 1s" TO DC-MSG
+                               MOVE "out_of_range" TO DC-CODE
+                               PERFORM DC-PROBLEM
+                           END-IF
+                           IF DC-OK = "Y" AND DC-NS > 300000000000
+                               MOVE "is above max 5m" TO DC-MSG
+                               MOVE "out_of_range" TO DC-CODE
+                               PERFORM DC-PROBLEM
+                           END-IF
                        END-IF
                    END-IF
                END-IF
@@ -397,32 +424,39 @@
                INITIALIZE CFG-WORKER-COUNT
                MOVE 4 TO CFG-WORKER-COUNT
            ELSE
-               PERFORM DC-PARSE-INT
-               IF DC-OK = "Y"
-                   IF DC-INT < 0
-                       MOVE "is negative, and CFG-WORKER-COUNT is "
-                         & "unsigned"
-                         TO DC-MSG
-                       MOVE "out_of_range" TO DC-CODE
-                       PERFORM DC-PROBLEM
-                   ELSE
-                       COMPUTE CFG-WORKER-COUNT = DC-INT
-                           ON SIZE ERROR
-                               MOVE "does not fit in CFG-WORKER-COUNT "
-                                 & "(PIC 9(2))"
-                                 TO DC-MSG
+               PERFORM DC-G-INT
+               IF DC-RX-OK = "N"
+                   MOVE "is not an integer" TO DC-MSG
+                   MOVE "invalid_type" TO DC-CODE
+                   PERFORM DC-PROBLEM
+               ELSE
+                   PERFORM DC-PARSE-INT
+                   IF DC-OK = "Y"
+                       IF DC-INT < 0
+                           MOVE "is negative, and CFG-WORKER-COUNT is "
+                             & "unsigned"
+                             TO DC-MSG
+                           MOVE "out_of_range" TO DC-CODE
+                           PERFORM DC-PROBLEM
+                       ELSE
+                           COMPUTE CFG-WORKER-COUNT = DC-INT
+                               ON SIZE ERROR
+                                   MOVE "does not fit in "
+                                     & "CFG-WORKER-COUNT (PIC 9(2))"
+                                     TO DC-MSG
+                                   MOVE "out_of_range" TO DC-CODE
+                                   PERFORM DC-PROBLEM
+                           END-COMPUTE
+                           IF DC-OK = "Y" AND DC-INT < 1
+                               MOVE "is below min 1" TO DC-MSG
                                MOVE "out_of_range" TO DC-CODE
                                PERFORM DC-PROBLEM
-                       END-COMPUTE
-                       IF DC-OK = "Y" AND DC-INT < 1
-                           MOVE "is below min 1" TO DC-MSG
-                           MOVE "out_of_range" TO DC-CODE
-                           PERFORM DC-PROBLEM
-                       END-IF
-                       IF DC-OK = "Y" AND DC-INT > 64
-                           MOVE "is above max 64" TO DC-MSG
-                           MOVE "out_of_range" TO DC-CODE
-                           PERFORM DC-PROBLEM
+                           END-IF
+                           IF DC-OK = "Y" AND DC-INT > 64
+                               MOVE "is above max 64" TO DC-MSG
+                               MOVE "out_of_range" TO DC-CODE
+                               PERFORM DC-PROBLEM
+                           END-IF
                        END-IF
                    END-IF
                END-IF
@@ -459,7 +493,7 @@
                END-IF
                IF DC-OK = "Y"
                    IF DC-ITEM-COUNT < 1
-                       MOVE "has too few items, below minItems 1"
+                       MOVE "has too few keys, below minKeys 1"
                          TO DC-MSG
                        MOVE "too_few_items" TO DC-CODE
                        PERFORM DC-PROBLEM
@@ -483,9 +517,13 @@
                PERFORM DC-PROBLEM
            ELSE
            PERFORM DC-COUNT-CHARS
+           IF DC-CHARS = 0
+               MOVE "has an empty key" TO DC-MSG
+               MOVE "out_of_range" TO DC-CODE
+               PERFORM DC-PROBLEM
+           ELSE
            IF DC-CHARS < 32
-               MOVE "has an item shorter than itemMinLength 32 "
-                 & "characters"
+               MOVE "has a key shorter than keyMinLength 32 characters"
                  TO DC-MSG
                MOVE "out_of_range" TO DC-CODE
                PERFORM DC-PROBLEM
@@ -496,13 +534,16 @@
                END-IF
            END-IF
            END-IF
+           END-IF
            .
 
       *> file input orders: its path into CFG-ORDERS-PATH
        DCF-CFG-ORDERS-PATH.
            MOVE "ORDERS_FILE" TO DC-NAME
            PERFORM DC-GET-ENV
+           MOVE "Y" TO DC-FROM-ENV
            IF DC-SET = "N" OR DC-LEN = 0
+               MOVE "N" TO DC-FROM-ENV
                MOVE SPACES TO DC-RAW
                MOVE "/data/orders.txt" TO DC-RAW
                MOVE 16 TO DC-LEN
@@ -520,6 +561,88 @@
            ELSE
                MOVE DC-RAW(1:DC-LEN) TO CFG-ORDERS-PATH
            END-IF.
+
+      *> DC-RX-OK is "Y" when DC-RAW(1:DC-LEN) is a int value
+      *> in the exact form SPEC section 5 gives it.
+       DC-G-INT.
+           MOVE "F000100000000000000E000400040000000000R0" TO
+             DC-RX-PROG(1:40)
+           MOVE "00500000000100002S000300050000000000R000" TO
+             DC-RX-PROG(41:40)
+           MOVE "600000000300001S000500070000000000E00080" TO
+             DC-RX-PROG(81:40)
+           MOVE "0080000000000M000100000000000000" TO DC-RX-PROG(121:32)
+           MOVE "0000043000004300000450000045000004800000" TO
+             DC-RX-RANGES(1:40)
+           MOVE "57" TO DC-RX-RANGES(41:2)
+           MOVE 8 TO DC-RX-N
+           MOVE 2 TO DC-RX-START
+           PERFORM DC-RX-MATCH.
+
+      *> DC-RX-OK is "Y" when DC-RAW(1:DC-LEN) is a go value
+      *> in the exact form SPEC section 5 gives it.
+       DC-G-GO.
+           MOVE "F000100000000000000E000400040000000000R0" TO
+             DC-RX-PROG(1:40)
+           MOVE "00500000000100002S000300050000000000J004" TO
+             DC-RX-PROG(41:40)
+           MOVE "200000000000000R004300000000300001J00080" TO
+             DC-RX-PROG(81:40)
+           MOVE "0000000000000J002000000000000000R0010000" TO
+             DC-RX-PROG(121:40)
+           MOVE "00000400001S000900160000000000J001200000" TO
+             DC-RX-PROG(161:40)
+           MOVE "000000000R001400000000500001R00140000000" TO
+             DC-RX-PROG(201:40)
+           MOVE "0600001S001300150000000000J0021000000000" TO
+             DC-RX-PROG(241:40)
+           MOVE "00000S001100210000000000R001800000000700" TO
+             DC-RX-PROG(281:40)
+           MOVE "001R001900000000800001S00180021000000000" TO
+             DC-RX-PROG(321:40)
+           MOVE "0S000900170000000000J002200000000000000J" TO
+             DC-RX-PROG(361:40)
+           MOVE "003800000000000000R002400000000900001R00" TO
+             DC-RX-PROG(401:40)
+           MOVE "3900000001000001R002600000001100001R0039" TO
+             DC-RX-PROG(441:40)
+           MOVE "00000001200001S002300250000000000R002900" TO
+             DC-RX-PROG(481:40)
+           MOVE "000001300001R003900000001400001S00270028" TO
+             DC-RX-PROG(521:40)
+           MOVE "0000000000R003200000001500001R0039000000" TO
+             DC-RX-PROG(561:40)
+           MOVE "01600001S003000310000000000R003500000001" TO
+             DC-RX-PROG(601:40)
+           MOVE "700001R003900000001800001S00330034000000" TO
+             DC-RX-PROG(641:40)
+           MOVE "0000R003900000001900003S0036003700000000" TO
+             DC-RX-PROG(681:40)
+           MOVE "00J004000000000000000J004100000000000000" TO
+             DC-RX-PROG(721:40)
+           MOVE "S000700430000000000S000600070000000000J0" TO
+             DC-RX-PROG(761:40)
+           MOVE "04400000000000000E004500080000000000M000" TO
+             DC-RX-PROG(801:40)
+           MOVE "100000000000000" TO DC-RX-PROG(841:15)
+           MOVE "0000043000004300000450000045000004800000" TO
+             DC-RX-RANGES(1:40)
+           MOVE "4800000480000057000004600000460000048000" TO
+             DC-RX-RANGES(41:40)
+           MOVE "0057000004600000460000048000005700001100" TO
+             DC-RX-RANGES(81:40)
+           MOVE "0001100000115000011500001170000117000011" TO
+             DC-RX-RANGES(121:40)
+           MOVE "5000011500001810000181000011500001150000" TO
+             DC-RX-RANGES(161:40)
+           MOVE "9560000956000011500001150000109000010900" TO
+             DC-RX-RANGES(201:40)
+           MOVE "0011500001150000104000010400001090000109" TO
+             DC-RX-RANGES(241:40)
+           MOVE "00001150000115" TO DC-RX-RANGES(281:14)
+           MOVE 45 TO DC-RX-N
+           MOVE 2 TO DC-RX-START
+           PERFORM DC-RX-MATCH.
 
       *> docuconf runtime: paragraphs for a generated loader.
       *> docuconf-cobol generate inlines it into every loader, or the
@@ -606,8 +729,8 @@
            PERFORM DC-PROBLEM.
 
       *> Reads the variable named in DC-NAME. DC-SET is "N" when it is
-      *> not set; DC-LEN is its length without trailing spaces, which a
-      *> COBOL field cannot keep.
+      *> not set; DC-LEN is its exact length, trailing spaces included,
+      *> so a value is never trimmed (SPEC section 5).
        DC-GET-ENV.
            MOVE FUNCTION LENGTH(FUNCTION TRIM(DC-NAME TRAILING))
                TO DC-NAME-LEN
@@ -619,13 +742,46 @@
                    MOVE "N" TO DC-SET
            END-ACCEPT
            MOVE 0 TO DC-LEN
-           IF DC-SET = "Y" AND DC-RAW NOT = SPACES
-               MOVE FUNCTION LENGTH(FUNCTION TRIM(DC-RAW TRAILING))
-                   TO DC-LEN
-               IF DC-LEN >= LENGTH OF DC-RAW
+           IF DC-SET = "Y"
+               PERFORM DC-ENV-LENGTH
+               IF DC-ENV-LEN >= LENGTH OF DC-RAW
+                   COMPUTE DC-LEN = LENGTH OF DC-RAW - 1
                    MOVE "is longer than the 8191 bytes a loader reads"
                        TO DC-MSG
                    PERFORM DC-BAD-RANGE
+               ELSE
+                   MOVE DC-ENV-LEN TO DC-LEN
+               END-IF
+           END-IF.
+
+      *> The length of the value DC-GET-ENV read, into DC-ENV-LEN. A
+      *> COBOL field pads a value with spaces, so the length comes from
+      *> the C library, strlen(getenv(name)). Where the program cannot
+      *> call the C library, it is the length without trailing spaces.
+       DC-ENV-LENGTH.
+           MOVE LOW-VALUES TO DC-NAME-Z
+           MOVE DC-NAME(1:DC-NAME-LEN) TO DC-NAME-Z(1:DC-NAME-LEN)
+           MOVE "Y" TO DC-C-OK
+           SET DC-ENV-PTR TO NULL
+           CALL "getenv" USING BY REFERENCE DC-NAME-Z
+               RETURNING DC-ENV-PTR
+               ON EXCEPTION
+                   MOVE "N" TO DC-C-OK
+           END-CALL
+           IF DC-C-OK = "Y" AND DC-ENV-PTR NOT = NULL
+               CALL "strlen" USING BY VALUE DC-ENV-PTR
+                   RETURNING DC-ENV-LEN
+                   ON EXCEPTION
+                       MOVE "N" TO DC-C-OK
+               END-CALL
+           ELSE
+               MOVE "N" TO DC-C-OK
+           END-IF
+           IF DC-C-OK = "N"
+               MOVE 0 TO DC-ENV-LEN
+               IF DC-RAW NOT = SPACES
+                   MOVE FUNCTION LENGTH(FUNCTION TRIM(DC-RAW TRAILING))
+                       TO DC-ENV-LEN
                END-IF
            END-IF.
 
@@ -694,16 +850,91 @@
                    MOVE "N" TO DC-OK
                END-IF
            END-IF
+           IF DC-OK = "Y"
+               PERFORM DC-FLOAT-MAG
+           END-IF
            IF DC-OK = "N"
                MOVE "is not a number" TO DC-MSG
                PERFORM DC-BAD-TYPE
+           END-IF.
+
+      *> DC-OK is "N" when DC-RAW(1:DC-LEN), a decimal float of SPEC
+      *> section 5's form, rounds beyond the largest double: it is not
+      *> finite, as 1e400 is not. DC-MAG is the power of ten of its
+      *> first significant digit; at 308 its digits are compared with
+      *> those of 2^1024 - 2^970, the first value that rounds to
+      *> infinity.
+       DC-FLOAT-MAG.
+           MOVE 0 TO DC-MAG
+           MOVE 0 TO DC-SIG-LEN
+           MOVE ALL "0" TO DC-SIG
+           MOVE "N" TO DC-IN-TIME
+           MOVE 1 TO DC-P
+           IF DC-RAW(1:1) = "-" OR DC-RAW(1:1) = "+"
+               MOVE 2 TO DC-P
+           END-IF
+           PERFORM VARYING DC-I FROM DC-P BY 1
+                   UNTIL DC-I > DC-LEN
+                       OR DC-RAW(DC-I:1) = "e" OR DC-RAW(DC-I:1) = "E"
+               EVALUATE TRUE
+                   WHEN DC-RAW(DC-I:1) = "."
+                       MOVE "Y" TO DC-IN-TIME
+                   WHEN DC-SIG-LEN = 0 AND DC-RAW(DC-I:1) = "0"
+                       IF DC-IN-TIME = "Y"
+                           SUBTRACT 1 FROM DC-MAG
+                       END-IF
+                   WHEN OTHER
+                       IF DC-SIG-LEN = 0 AND DC-IN-TIME = "Y"
+                           SUBTRACT 1 FROM DC-MAG
+                       END-IF
+                       IF DC-IN-TIME = "N" AND DC-SIG-LEN > 0
+                           ADD 1 TO DC-MAG
+                       END-IF
+                       IF DC-SIG-LEN < 40
+                           ADD 1 TO DC-SIG-LEN
+                           MOVE DC-RAW(DC-I:1) TO DC-SIG(DC-SIG-LEN:1)
+                       END-IF
+               END-EVALUATE
+           END-PERFORM
+           IF DC-SIG-LEN > 0 AND DC-I < DC-LEN
+               ADD 1 TO DC-I
+               MOVE "+" TO DC-C
+               IF DC-RAW(DC-I:1) = "-" OR DC-RAW(DC-I:1) = "+"
+                   MOVE DC-RAW(DC-I:1) TO DC-C
+                   ADD 1 TO DC-I
+               END-IF
+               PERFORM UNTIL DC-I >= DC-LEN OR DC-RAW(DC-I:1) NOT = "0"
+                   ADD 1 TO DC-I
+               END-PERFORM
+               IF DC-LEN - DC-I + 1 > 6
+                   IF DC-C = "+"
+                       MOVE "N" TO DC-OK
+                   END-IF
+                   MOVE 0 TO DC-SIG-LEN
+               ELSE
+                   COMPUTE DC-CP =
+                       FUNCTION NUMVAL(DC-RAW(DC-I:DC-LEN - DC-I + 1))
+                   IF DC-C = "-"
+                       SUBTRACT DC-CP FROM DC-MAG
+                   ELSE
+                       ADD DC-CP TO DC-MAG
+                   END-IF
+               END-IF
+           END-IF
+           IF DC-SIG-LEN > 0
+               IF DC-MAG > 308
+                   MOVE "N" TO DC-OK
+               END-IF
+               IF DC-MAG = 308 AND DC-SIG >= DC-INF-DIGITS
+                   MOVE "N" TO DC-OK
+               END-IF
            END-IF.
 
       *> true or false, in any case. DC-BOOL is "Y" or "N".
        DC-PARSE-BOOL.
            MOVE "Y" TO DC-OK
            MOVE SPACES TO DC-TMP
-           IF DC-LEN <= 5
+           IF DC-LEN = 4 OR DC-LEN = 5
                MOVE FUNCTION LOWER-CASE(DC-RAW(1:DC-LEN)) TO DC-TMP
            END-IF
            EVALUATE DC-TMP
@@ -744,33 +975,43 @@
                        PERFORM DC-DUR-TIMESPAN
                END-EVALUATE
            END-IF
+           IF DC-OK = "Y"
+               IF DC-NEG = "Y"
+                   COMPUTE DC-NS = 0 - DC-NS
+               END-IF
+               IF DC-NS > 9223372036854775807
+                       OR DC-NS + 1 < -9223372036854775807
+                   MOVE "N" TO DC-OK
+               END-IF
+           END-IF
            IF DC-OK = "N"
                MOVE "is not a duration in the contract's encoding"
                    TO DC-MSG
                PERFORM DC-BAD-TYPE
-           ELSE
-               IF DC-NEG = "Y"
-                   COMPUTE DC-NS = 0 - DC-NS
-               END-IF
            END-IF.
 
-      *> Reads a decimal number at DC-P into DC-NUM; DC-OK is "N" when
+      *> Reads a decimal number at DC-P into DC-NUM, with a point or,
+      *> in ISO 8601, a comma before its fraction; DC-OK is "N" when
       *> there is none.
        DC-DUR-NUMBER.
            MOVE DC-P TO DC-Q
            PERFORM UNTIL DC-P > DC-LEN
                    OR (DC-RAW(DC-P:1) IS NOT NUMERIC
-                       AND DC-RAW(DC-P:1) NOT = ".")
+                       AND DC-RAW(DC-P:1) NOT = "."
+                       AND DC-RAW(DC-P:1) NOT = ",")
                ADD 1 TO DC-P
            END-PERFORM
-           IF DC-P = DC-Q
+           IF DC-P = DC-Q OR DC-P - DC-Q > 60
                MOVE "N" TO DC-OK
            ELSE
-               IF DC-RAW(DC-Q:DC-P - DC-Q) = "."
+               MOVE SPACES TO DC-TMP
+               MOVE DC-RAW(DC-Q:DC-P - DC-Q) TO DC-TMP
+               INSPECT DC-TMP REPLACING ALL "," BY "."
+               IF DC-TMP = "."
                    MOVE "N" TO DC-OK
                ELSE
                    COMPUTE DC-NUM =
-                       FUNCTION NUMVAL(DC-RAW(DC-Q:DC-P - DC-Q))
+                       FUNCTION NUMVAL(DC-TMP(1:DC-P - DC-Q))
                        ON SIZE ERROR
                            MOVE "N" TO DC-OK
                    END-COMPUTE
@@ -1270,7 +1511,11 @@
            END-IF.
 
       *> Puts DOCUCONF_FILE_ROOT in front of the path in DC-RAW, as
-      *> every docuconf SDK does for local runs.
+      *> every docuconf SDK does for local runs. DC-FROM-ENV is "Y"
+      *> when the path came from the input's pathEnv variable: docuconf
+      *> exec sets an unset one to the path it checked, the root
+      *> (cleaned, as Go's filepath.Join cleans it) already in front,
+      *> so a value under the cleaned root is kept as it is.
        DC-APPLY-ROOT.
            MOVE SPACES TO DC-ROOT
            ACCEPT DC-ROOT FROM ENVIRONMENT "DOCUCONF_FILE_ROOT"
@@ -1283,6 +1528,25 @@
                IF DC-ROOT-LEN > 1 AND DC-ROOT(DC-ROOT-LEN:1) = "/"
                    SUBTRACT 1 FROM DC-ROOT-LEN
                END-IF
+           END-IF
+           IF DC-ROOT NOT = SPACES AND DC-FROM-ENV = "Y"
+               PERFORM DC-CLEAN-ROOT
+               EVALUATE TRUE
+                   WHEN DC-CROOT(1:DC-CROOT-LEN) = "."
+                       IF DC-RAW(1:1) NOT = "/"
+                           MOVE SPACES TO DC-ROOT
+                       END-IF
+                   WHEN DC-CROOT(1:DC-CROOT-LEN) = "/"
+                       CONTINUE
+                   WHEN DC-LEN > DC-CROOT-LEN
+                       IF DC-RAW(1:DC-CROOT-LEN)
+                               = DC-CROOT(1:DC-CROOT-LEN)
+                               AND DC-RAW(DC-CROOT-LEN + 1:1) = "/"
+                           MOVE SPACES TO DC-ROOT
+                       END-IF
+               END-EVALUATE
+           END-IF
+           IF DC-ROOT NOT = SPACES
                IF DC-ROOT-LEN + DC-LEN >= LENGTH OF DC-RAW
                    MOVE "is too long with DOCUCONF_FILE_ROOT" TO DC-MSG
                    PERFORM DC-BAD-RANGE
@@ -1295,6 +1559,80 @@
                    MOVE DC-PATH TO DC-RAW
                END-IF
            END-IF.
+
+      *> DC-CROOT(1:DC-CROOT-LEN) is DC-ROOT(1:DC-ROOT-LEN) cleaned
+      *> lexically, as Go's filepath.Clean does: no empty or "."
+      *> elements, and ".." removing the element before it.
+       DC-CLEAN-ROOT.
+           MOVE SPACES TO DC-CROOT
+           MOVE 0 TO DC-CROOT-LEN
+           MOVE 0 TO DC-CBASE
+           IF DC-ROOT(1:1) = "/"
+               MOVE "/" TO DC-CROOT(1:1)
+               MOVE 1 TO DC-CROOT-LEN
+               MOVE 1 TO DC-CBASE
+           END-IF
+           MOVE 1 TO DC-I
+           PERFORM UNTIL DC-I > DC-ROOT-LEN
+               MOVE DC-I TO DC-J
+               PERFORM UNTIL DC-J > DC-ROOT-LEN
+                       OR DC-ROOT(DC-J:1) = "/"
+                   ADD 1 TO DC-J
+               END-PERFORM
+               COMPUTE DC-Q = DC-J - DC-I
+               EVALUATE TRUE
+                   WHEN DC-Q = 0
+                       CONTINUE
+                   WHEN DC-Q = 1 AND DC-ROOT(DC-I:1) = "."
+                       CONTINUE
+                   WHEN DC-Q = 2 AND DC-ROOT(DC-I:2) = ".."
+                       PERFORM DC-CLEAN-UP
+                   WHEN OTHER
+                       IF DC-CROOT-LEN > DC-CBASE
+                           ADD 1 TO DC-CROOT-LEN
+                           MOVE "/" TO DC-CROOT(DC-CROOT-LEN:1)
+                       END-IF
+                       MOVE DC-ROOT(DC-I:DC-Q)
+                           TO DC-CROOT(DC-CROOT-LEN + 1:DC-Q)
+                       ADD DC-Q TO DC-CROOT-LEN
+               END-EVALUATE
+               COMPUTE DC-I = DC-J + 1
+           END-PERFORM
+           IF DC-CROOT-LEN = 0
+               MOVE "." TO DC-CROOT
+               MOVE 1 TO DC-CROOT-LEN
+           END-IF.
+
+      *> A ".." element: drops the last element of DC-CROOT, unless
+      *> there is none (kept at the top of a rooted path) or it is
+      *> ".." itself.
+       DC-CLEAN-UP.
+           MOVE DC-CROOT-LEN TO DC-CI
+           PERFORM UNTIL DC-CI <= DC-CBASE
+                   OR DC-CROOT(DC-CI:1) = "/"
+               SUBTRACT 1 FROM DC-CI
+           END-PERFORM
+           EVALUATE TRUE
+               WHEN DC-CROOT-LEN > DC-CBASE
+                       AND DC-CROOT-LEN - DC-CI = 2
+                       AND DC-CROOT(DC-CI + 1:2) = ".."
+               WHEN DC-CROOT-LEN = DC-CBASE AND DC-CBASE = 0
+                   IF DC-CROOT-LEN > 0
+                       ADD 1 TO DC-CROOT-LEN
+                       MOVE "/" TO DC-CROOT(DC-CROOT-LEN:1)
+                   END-IF
+                   MOVE ".." TO DC-CROOT(DC-CROOT-LEN + 1:2)
+                   ADD 2 TO DC-CROOT-LEN
+               WHEN DC-CROOT-LEN > DC-CBASE
+                   MOVE DC-CI TO DC-CROOT-LEN
+                   IF DC-CROOT-LEN > DC-CBASE
+                           AND DC-CROOT(DC-CROOT-LEN:1) = "/"
+                       SUBTRACT 1 FROM DC-CROOT-LEN
+                   END-IF
+               WHEN OTHER
+                   CONTINUE
+           END-EVALUATE
+           MOVE SPACES TO DC-CROOT(DC-CROOT-LEN + 1:).
 
       *> Counts the characters (UTF-8 code points) of DC-RAW(1:DC-LEN)
       *> into DC-CHARS: every byte but a continuation byte (X"80" to
