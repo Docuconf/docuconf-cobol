@@ -3,7 +3,7 @@ module github.com/docuconf/docuconf-cobol
 go 1.24.0
 
 require (
-	github.com/docuconf/docuconf-go v0.0.0-20261008010717-a84031e0174b
+	github.com/docuconf/docuconf-go v0.0.0-20261008234855-9620369f34b0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

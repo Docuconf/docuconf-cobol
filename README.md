@@ -15,7 +15,7 @@ You need Go 1.25 or later and GnuCOBOL 3 (`apt-get install gnucobol3`). Until th
 go install github.com/docuconf/docuconf-cobol/cmd/docuconf-cobol@latest
 # docuconf exec is not in a docuconf-go release yet. This is the commit
 # this SDK is tested against (go.mod pins the same one):
-go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261008010717-a84031e0174b
+go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261008234855-9620369f34b0
 ```
 
 Once docuconf-go tags a release that includes `docuconf exec`, use that version instead of the commit.
@@ -232,7 +232,7 @@ bad-config.cpy:7: CFG-RATIO: @default: 0.125 has more decimal places than PIC 9V
 - A COBOL field is padded with spaces, so a value's trailing spaces are lost. Leading spaces and other trailing characters (a newline) are kept.
 - `PIC X(n)` holds n bytes, and the contract's `maxLength` and `itemMaxLength` count characters (Unicode code points), so a value with multi-byte UTF-8 characters can pass `docuconf exec` and still not fit: `ZÜ01` is 4 characters but 5 bytes. The loader reports it as `out_of_range`. To have the platform reject such values before deploying, declare a smaller `@max-length` (or `@item-max-length`) that leaves room for them, or restrict the value to ASCII with `@pattern "^[ -~]*$"`. Strings, URLs and json values get a `maxLength`, and string list items an `itemMaxLength`, from their PIC X size; an enum's values are checked against the field when the copybook is generated.
 - The loader reads values of up to 8191 bytes and list items of up to 1024 bytes, and lists of up to 1000 items. It reports at most 100 problems in full.
-- `@min-length`, `@max-length` and `@pattern` on strings, URL schemes, JSON Schemas and file contents are checked by `docuconf exec` only.
+- `@min-length`, `@max-length` and `@pattern` on strings, `@item-min-length` and an `@item-max-length` below the PIC size on string list items, URL schemes, JSON Schemas and file contents are checked by `docuconf exec` only.
 - A json variable is passed through as text; GnuCOBOL 3 has no JSON PARSE.
 - `OCCURS DEPENDING ON` must be on the record's last item, as cobc requires; otherwise use `OCCURS n` with `@count`.
 - Config overlays and profiles (SPEC §4.7, §4.4) do not apply: a COBOL program reads its configuration from the environment.

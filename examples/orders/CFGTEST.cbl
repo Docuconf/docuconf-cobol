@@ -39,6 +39,15 @@
                DISPLAY "FAIL: ALLOWED_ORIGINS" END-DISPLAY
                ADD 1 TO WS-FAILS
            END-IF
+      *> WEBHOOK_KEYS=old,new: two keys, mid-rotation.
+           IF CFG-WEBHOOK-KEY-COUNT NOT = 2 OR
+                   CFG-WEBHOOK-KEYS(1) NOT =
+                       "old-webhook-key-0123456789abcdef0123" OR
+                   CFG-WEBHOOK-KEYS(2) NOT =
+                       "new-webhook-key-0123456789abcdef0123"
+               DISPLAY "FAIL: WEBHOOK_KEYS" END-DISPLAY
+               ADD 1 TO WS-FAILS
+           END-IF
            IF WS-FAILS = 0
                DISPLAY "ok" END-DISPLAY
                MOVE 0 TO RETURN-CODE

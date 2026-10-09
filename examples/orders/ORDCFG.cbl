@@ -92,6 +92,7 @@
            PERFORM DCV-CFG-ALLOWED-ORIGINS
            PERFORM DCV-CFG-REQUEST-TIMEOUT
            PERFORM DCV-CFG-WORKER-COUNT
+           PERFORM DCV-CFG-WEBHOOK-KEYS
            PERFORM DCF-CFG-ORDERS-PATH
            IF DC-PROBLEMS = 0
                MOVE 0 TO RETURN-CODE
@@ -351,6 +352,57 @@
                    END-IF
                END-IF
            END-IF.
+
+      *> WEBHOOK_KEYS into CFG-WEBHOOK-KEYS
+       DCV-CFG-WEBHOOK-KEYS.
+           MOVE "WEBHOOK_KEYS" TO DC-NAME
+           MOVE 2 TO DC-ITEM-LIMIT
+           PERFORM DC-GET-ENV
+           IF DC-LEN = 0
+               MOVE "N" TO DC-SET
+           END-IF
+           MOVE 2 TO CFG-WEBHOOK-KEY-COUNT
+           PERFORM VARYING DC-K FROM 1 BY 1
+                   UNTIL DC-K > 2
+               INITIALIZE CFG-WEBHOOK-KEYS(DC-K)
+           END-PERFORM
+           IF DC-SET = "N"
+               MOVE 0 TO DC-ITEM-COUNT
+           ELSE
+               MOVE "," TO DC-SEP
+               MOVE 1 TO DC-SEP-LEN
+               PERFORM DC-SPLIT-CSV
+               IF DC-OK = "Y"
+                   IF DC-ITEM-COUNT < 1
+                       MOVE "has too few items, below minItems 1"
+                         TO DC-MSG
+                       MOVE "too_few_items" TO DC-CODE
+                       PERFORM DC-PROBLEM
+                   END-IF
+                   PERFORM VARYING DC-K FROM 1 BY 1
+                           UNTIL DC-K > DC-ITEM-COUNT
+                       PERFORM DCI-CFG-WEBHOOK-KEYS
+                   END-PERFORM
+               ELSE
+                   MOVE 0 TO DC-ITEM-COUNT
+               END-IF
+           END-IF
+           MOVE DC-ITEM-COUNT TO CFG-WEBHOOK-KEY-COUNT.
+
+       DCI-CFG-WEBHOOK-KEYS.
+           PERFORM DC-ITEM-TO-RAW
+           IF DC-LEN > 256
+               MOVE "does not fit in CFG-WEBHOOK-KEYS (PIC X(256))"
+                 TO DC-MSG
+               MOVE "out_of_range" TO DC-CODE
+               PERFORM DC-PROBLEM
+           ELSE
+               MOVE SPACES TO CFG-WEBHOOK-KEYS(DC-K)
+               IF DC-LEN > 0
+                   MOVE DC-RAW(1:DC-LEN) TO CFG-WEBHOOK-KEYS(DC-K)
+               END-IF
+           END-IF
+           .
 
       *> file input orders: its path into CFG-ORDERS-PATH
        DCF-CFG-ORDERS-PATH.
