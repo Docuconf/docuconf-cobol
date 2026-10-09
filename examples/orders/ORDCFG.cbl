@@ -444,9 +444,19 @@
            IF DC-SET = "N"
                MOVE 0 TO DC-ITEM-COUNT
            ELSE
-               MOVE "," TO DC-SEP
-               MOVE 1 TO DC-SEP-LEN
-               PERFORM DC-SPLIT-CSV
+               PERFORM DC-CHECK-REF
+               IF DC-REF = "Y"
+                   MOVE "holds an unresolved injector reference (vault"
+                     & ":, op:// or ref+); the injector that should "
+                     & "resolve it did not run"
+                     TO DC-MSG
+                   MOVE "invalid_type" TO DC-CODE
+                   PERFORM DC-PROBLEM
+               ELSE
+                   MOVE "," TO DC-SEP
+                   MOVE 1 TO DC-SEP-LEN
+                   PERFORM DC-SPLIT-CSV
+               END-IF
                IF DC-OK = "Y"
                    IF DC-ITEM-COUNT < 1
                        MOVE "has too few items, below minItems 1"
@@ -472,10 +482,19 @@
                MOVE "out_of_range" TO DC-CODE
                PERFORM DC-PROBLEM
            ELSE
+           PERFORM DC-COUNT-CHARS
+           IF DC-CHARS < 32
+               MOVE "has an item shorter than itemMinLength 32 "
+                 & "characters"
+                 TO DC-MSG
+               MOVE "out_of_range" TO DC-CODE
+               PERFORM DC-PROBLEM
+           ELSE
                MOVE SPACES TO CFG-WEBHOOK-KEYS(DC-K)
                IF DC-LEN > 0
                    MOVE DC-RAW(1:DC-LEN) TO CFG-WEBHOOK-KEYS(DC-K)
                END-IF
+           END-IF
            END-IF
            .
 
