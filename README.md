@@ -83,7 +83,7 @@ docuconf: 2 configuration problems:
   PORT: 0 is below min 1 (out_of_range)
 ```
 
-It exits 1 and writes the same lines to the termination log, so `kubectl describe pod` shows them. Run without `docuconf exec`, the loader catches the same `PORT=0` itself: it checks required variables, types, enums, `@min`/`@max` (and `@item-min`, `@item-max`, `@min-items`, `@max-items`), plus what only COBOL can know, a value that does not fit its field. It never prints a value.
+It exits 1 and writes the same lines to the termination log, so `kubectl describe pod` shows them. Run without `docuconf exec`, the loader catches the same `PORT=0` itself: it checks every rule a variable can have except a json value's JSON Schema. That is required variables, types, enums, `@min`/`@max` (and `@item-min`, `@item-max`, `@min-items`, `@max-items`), `@min-length`/`@max-length` and `@item-min-length`/`@item-max-length` in characters, `@pattern`, URL form and `@schemes`, JSON syntax, numbering of indexed lists, and unresolved injector references in secrets, plus what only COBOL can know, a value that does not fit its field. It never prints a value.
 
 ## 5. Test your config
 
@@ -124,10 +124,10 @@ The [example's walkthrough](examples/orders/README.md#6-deploy) has the CronJob.
 
 ### How docuconf works in COBOL
 
-The other docuconf SDKs validate everything inside the app. COBOL cannot reasonably parse X.509 certificates, run RE2 patterns or check JSON Schemas, so the work is split in three:
+The other docuconf SDKs validate everything inside the app. COBOL cannot reasonably parse X.509 certificates or check JSON Schemas, so the work is split in three:
 
 1. **The declaration is a copybook.** The PIC clauses give the types and limits (`PIC 9(5)` is an int from 0 to 99999, `PIC X(64)` a string of at most 64 characters, `OCCURS 8` a list of at most 8 items, level-88s an enum), and the tags give the rest.
-2. **`docuconf-cobol generate`** (a Go tool built on the docuconf-go SDK) writes `contract.cue` and a loader program. The loader reads each variable with `ACCEPT ... FROM ENVIRONMENT`, applies defaults, converts the wire values into the typed fields (`NUMVAL` for numbers, csv, json or indexed lists into the `OCCURS` table and its count, durations in any of the four wire encodings into the unit the field counts in), and checks ranges, enums and what fits.
+2. **`docuconf-cobol generate`** (a Go tool built on the docuconf-go SDK) writes `contract.cue` and a loader program. The loader reads each variable with `ACCEPT ... FROM ENVIRONMENT`, applies defaults, converts the wire values into the typed fields (`NUMVAL` for numbers, csv, json or indexed lists into the `OCCURS` table and its count, durations in any of the four wire encodings into the unit the field counts in), and checks every variable rule but JSON Schemas: ranges, enums, lengths in characters, item counts, URL form and schemes, JSON syntax, injector references and what fits. `@pattern` is compiled by generate with Go's RE2 compiler, the one `docuconf exec` uses, into a table the loader runs over the value's code points, so the loader and `docuconf exec` agree on every match.
 3. **`docuconf exec`** (in the [docuconf CLI](https://github.com/docuconf/docuconf-go)) is the container's entrypoint. It checks everything with the Go SDK's contract-first loader, which passes the whole conformance suite: ranges, patterns, schemes, list bounds, JSON Schemas, TLS certificates. It passes the program the environment it checked: `-env-file` values fill what the process environment does not set, and every variable still unset gets its contract default in its wire encoding (`-no-defaults` turns that off).
 
 The loader's problems look like the other SDKs': a `docuconf: N configuration problems:` line, then one `NAME: message (code)` line per problem, on stderr and in the termination log (`DOCUCONF_TERMINATION_LOG`, `-` for none, else `/dev/termination-log` when it exists).
@@ -230,8 +230,10 @@ bad-config.cpy:7: CFG-RATIO: @default: 0.125 has more decimal places than PIC 9V
 - A COBOL field is padded with spaces, so a value's trailing spaces are lost. Leading spaces and other trailing characters (a newline) are kept.
 - `PIC X(n)` holds n bytes, and the contract's `maxLength` and `itemMaxLength` count characters (Unicode code points), so a value with multi-byte UTF-8 characters can pass `docuconf exec` and still not fit: `ZÜ01` is 4 characters but 5 bytes. The loader reports it as `out_of_range`. To have the platform reject such values before deploying, declare a smaller `@max-length` (or `@item-max-length`) that leaves room for them, or restrict the value to ASCII with `@pattern "^[ -~]*$"`. Strings, URLs and json values get a `maxLength`, and string list items an `itemMaxLength`, from their PIC X size; an enum's values are checked against the field when the copybook is generated.
 - The loader reads values of up to 8191 bytes and list items of up to 1024 bytes, and lists of up to 1000 items. It reports at most 100 problems in full.
-- `@min-length`, `@max-length` and `@pattern` on strings, URL schemes, JSON Schemas and file contents are checked by `docuconf exec` only.
-- A json variable is passed through as text; GnuCOBOL 3 has no JSON PARSE.
+- A json variable's JSON Schema, and file inputs (existence, size, contents, certificates), are checked by `docuconf exec` only; the loader puts a file's path in its field. Everything else a variable declares, the loader checks too.
+- A json variable is checked to be JSON (nested up to 256 deep) and passed through as text; GnuCOBOL 3 has no JSON PARSE.
+- `@pattern` compiles to at most 1000 instructions and 4000 character ranges in the loader. A larger pattern (a large repetition such as `.{1,500}`, or many Unicode classes such as `\p{L}`, about 660 ranges each) gets a warning at generate time and is checked by `docuconf exec` only.
+- An indexed list's items must run from `NAME__0` with no gap; the loader looks for a stray item up to `NAME__1000`.
 - `OCCURS DEPENDING ON` must be on the record's last item, as cobc requires; otherwise use `OCCURS n` with `@count`.
 - Config overlays and profiles (SPEC §4.7, §4.4) do not apply: a COBOL program reads its configuration from the environment.
 
@@ -245,7 +247,7 @@ docuconf-cobol runtime [-o dir]
 
 `generate` writes `contract.cue` (or `-contract`, for a repository with several jobs) and `<PROGRAM>.cbl` next to the copybook, or in `-o`, which it creates. Flags may come before or after the copybook. `-check` writes nothing and exits 1 when either file is out of date. `-free` reads a free-format copybook; the loader compiles in either format.
 
-By default each loader holds the docuconf runtime (about 750 lines, and a 1 MB item table in working storage). With `-runtime copy`, the loader instead COPYs `DCRTWS` and `DCRTPD`, which `docuconf-cobol runtime -o <copylib>` writes once into a shared copy library; a runtime fix then means replacing two copybooks and recompiling. Keep the copybooks at the version of the `docuconf-cobol` that generated the loaders.
+By default each loader holds the docuconf runtime (about 1300 lines, and about 1.2 MB of working storage, mostly the item table). With `-runtime copy`, the loader instead COPYs `DCRTWS` and `DCRTPD`, which `docuconf-cobol runtime -o <copylib>` writes once into a shared copy library; a runtime fix then means replacing two copybooks and recompiling. Keep the copybooks at the version of the `docuconf-cobol` that generated the loaders.
 
 ### Conformance
 
@@ -253,9 +255,10 @@ By default each loader holds the docuconf runtime (about 750 lines, and a 1 MB i
 
 - **Cases with typed values**: `docuconf exec` accepts the environment, and every field the loader filled in (strings, ints up to the 64-bit limit, floats, bools, durations in all four encodings, csv, json and indexed lists, json text, unset optionals through `@present`) matches the expected value.
 - **Error cases**: `docuconf exec` reports each expected violation code and the program never starts.
+- **The loader alone**: every case runs again without `docuconf exec`, with the case's rules as copybook tags, so only the generated COBOL loader checks the environment. It must store the same values, or stop the program with each expected violation code and never print a secret. The only cases left to `docuconf exec` are the two JSON Schema cases (`schema_mismatch`).
 - **0 skipped.** String values are compared without trailing spaces (see Limits); no case depends on them.
 
-It also runs the loader's own checks without `docuconf exec`. It needs `cobc` and the docuconf CLI:
+`tests/loader_checks_test.go` compares the loader with Go directly: `@pattern` matches with `regexp`, JSON syntax with `encoding/json`, and URL form, schemes, lengths in characters and injector references on many inputs. It needs `cobc` and the docuconf CLI:
 
 <!-- not executed: CI runs it -->
 ```sh

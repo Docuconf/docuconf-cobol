@@ -54,6 +54,55 @@
            05  DC-TLOG-STATUS      PIC XX.
            05  DC-LINES            OCCURS 100.
                10  DC-LINE         PIC X(256).
+           05  DC-CHARS            PIC 9(5) COMP-5.
+           05  DC-CI               PIC 9(5) COMP-5.
+           05  DC-REF              PIC X.
+           05  DC-SAVE-OK          PIC X.
+           05  DC-GAP              PIC X.
+           05  DC-JSTATE           PIC X.
+           05  DC-JDEPTH           PIC 9(4) COMP-5.
+           05  DC-JSTACK           PIC X(256).
+      *> A compiled @pattern (see DC-RX-MATCH) and the state of its run.
+           05  DC-RX-START         PIC 9(4) COMP-5.
+           05  DC-RX-N             PIC 9(4) COMP-5.
+           05  DC-RX-OK            PIC X.
+           05  DC-RX-EOK           PIC X.
+           05  DC-RX-HIT           PIC X.
+           05  DC-RX-GEN           PIC 9(9) COMP-5.
+           05  DC-RX-NCP           PIC 9(5) COMP-5.
+           05  DC-RX-POS           PIC 9(5) COMP-5.
+           05  DC-RX-CTX           PIC 9(4) COMP-5.
+           05  DC-RX-BIT           PIC 9(4) COMP-5.
+           05  DC-RX-A             PIC 9(4) COMP-5.
+           05  DC-RX-B             PIC 9(4) COMP-5.
+           05  DC-RX-CUR           PIC 9(9) COMP-5.
+           05  DC-RX-PREV          PIC 9(9) COMP-5.
+           05  DC-RX-I             PIC 9(5) COMP-5.
+           05  DC-RX-J             PIC 9(5) COMP-5.
+           05  DC-RX-K             PIC 9(5) COMP-5.
+           05  DC-RX-T             PIC 9(5) COMP-5.
+           05  DC-RX-CN            PIC 9(5) COMP-5.
+           05  DC-RX-SN            PIC 9(5) COMP-5.
+           05  DC-RX-KN            PIC 9(5) COMP-5.
+           05  DC-RX-NB            PIC 9(4) COMP-5.
+           05  DC-RX-PROG          PIC X(19000).
+           05  DC-RX-INSTS REDEFINES DC-RX-PROG.
+               10  DC-RX-INST      OCCURS 1000.
+                   15  DC-RX-OP    PIC X.
+                   15  DC-RX-OUT   PIC 9(4).
+                   15  DC-RX-ARG   PIC 9(4).
+                   15  DC-RX-R1    PIC 9(5).
+                   15  DC-RX-RN    PIC 9(5).
+           05  DC-RX-RANGES        PIC X(56000).
+           05  DC-RX-RTAB REDEFINES DC-RX-RANGES.
+               10  DC-RX-RANGE     OCCURS 4000.
+                   15  DC-RX-LO    PIC 9(7).
+                   15  DC-RX-HI    PIC 9(7).
+           05  DC-RX-MARK          PIC 9(9) COMP-5 OCCURS 1000.
+           05  DC-RX-CL            PIC 9(5) COMP-5 OCCURS 1000.
+           05  DC-RX-SEED          PIC 9(5) COMP-5 OCCURS 1000.
+           05  DC-RX-STK           PIC 9(5) COMP-5 OCCURS 2000.
+           05  DC-RX-CP            PIC 9(9) COMP-5 OCCURS 8192.
            05  DC-ITEMS            OCCURS 1000.
                10  DC-ITEM         PIC X(1024).
                10  DC-ITEM-LEN     PIC 9(5) COMP-5.

@@ -105,7 +105,7 @@ docuconf: 2 configuration problems:
   PORT: 0 is below min 1 (out_of_range)
 ```
 
-The same lines go to the termination log, so `kubectl describe pod` shows them. Run the job without `docuconf exec` and the loader still refuses `PORT=0` (it checks `@min` and `@max`); what it leaves to `docuconf exec` is the URL scheme of `DATABASE_URL` and the orders file itself.
+The same lines go to the termination log, so `kubectl describe pod` shows them. Run the job without `docuconf exec` and the loader still refuses `PORT=0`: it checks every rule of a variable, the URL scheme of `DATABASE_URL` included. What it leaves to `docuconf exec` is the orders file itself.
 
 For a local run, keep the variables in a `.env` file: `docuconf exec -env-file .env` checks its values and passes them to the job (a variable already set in the environment wins). `docuconf check -contract contract.cue` runs the same checks without starting anything, for an init container or CI.
 

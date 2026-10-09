@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"os"
 	"os/exec"
@@ -156,6 +157,82 @@ func TestConformance(t *testing.T) {
 	}
 	t.Logf("conformance: %d cases (%d with typed values checked in the COBOL record, %d rejected by docuconf exec before the program starts), %d skipped",
 		len(cases), expectN, errorN, skipped)
+
+	// The same cases without docuconf exec: the generated loader alone
+	// must load the same values and report the same problems, except
+	// for the rules COBOL leaves to docuconf exec (loaderExecOnly).
+	var loaderValues, loaderErrors, loaderExec int
+	for _, c := range cases {
+		d := built[string(c.Contract)]
+		t.Run("loader/"+c.ID, func(t *testing.T) {
+			if why := loaderExecOnlyReason(c); why != "" {
+				loaderExec++
+				t.Logf("left to docuconf exec: %s", why)
+				return
+			}
+			stdout, stderr, code := d.runLoader(t, c.Env)
+			if len(c.Errors) > 0 {
+				loaderErrors++
+				if code != 3 {
+					t.Fatalf("the loader did not stop the program (exit %d)\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+				}
+				if strings.Contains(stdout, "DRIVER") {
+					t.Fatalf("the program ran despite the problems")
+				}
+				for _, e := range c.Errors {
+					if !hasViolation(stderr, e.Var, e.Code) {
+						t.Errorf("want %s (%s) from the loader in:\n%s", e.Var, e.Code, stderr)
+					}
+				}
+				for name, cv := range d.vars {
+					if !cv.secret {
+						continue
+					}
+					for k, val := range c.Env {
+						if val != "" && (k == name || strings.HasPrefix(k, name+"__")) && strings.Contains(stderr, val) {
+							t.Errorf("the loader printed the value of secret %s", name)
+						}
+					}
+				}
+				return
+			}
+			loaderValues++
+			if code != 0 {
+				t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+			}
+			got, err := d.parse(stdout)
+			if err != nil {
+				t.Fatalf("%v\nstdout:\n%q", err, stdout)
+			}
+			for name, want := range c.Expect {
+				if err := compare(d.vars[name], got[name], want); err != nil {
+					t.Errorf("%s: %v", name, err)
+				}
+			}
+		})
+	}
+	t.Logf("loader alone: %d cases with values, %d rejected by the loader, %d left to docuconf exec (%s)",
+		loaderValues, loaderErrors, loaderExec, strings.Join(slices.Sorted(maps.Values(loaderExecOnly)), "; "))
+	if loaderValues+loaderErrors+loaderExec != len(cases) {
+		t.Errorf("the loader pass covered %d of %d cases", loaderValues+loaderErrors+loaderExec, len(cases))
+	}
+}
+
+// loaderExecOnly lists the problem codes the COBOL loader leaves to
+// docuconf exec, with the reason. A case expecting one of them runs only
+// under docuconf exec; every other case also runs against the loader
+// alone.
+var loaderExecOnly = map[string]string{
+	"schema_mismatch": "JSON Schema validation",
+}
+
+func loaderExecOnlyReason(c confCase) string {
+	for _, e := range c.Errors {
+		if why, ok := loaderExecOnly[e.Code]; ok {
+			return why
+		}
+	}
+	return ""
 }
 
 func hasViolation(out, name, code string) bool {
@@ -170,6 +247,7 @@ func hasViolation(out, name, code string) bool {
 
 type cvar struct {
 	name, typ, items, field, count, present string
+	secret                                  bool
 }
 
 type driver struct {
@@ -206,6 +284,7 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 		v := doc.Vars[n]
 		cv := &cvar{name: n, typ: v["type"].(string), field: fmt.Sprintf("F-%d", i+1),
 			present: fmt.Sprintf("P-%d", i+1), count: fmt.Sprintf("C-%d", i+1)}
+		cv.secret = v["secret"] == true
 		d.vars[n] = cv
 		tags := []string{"@env " + n, "@present " + cv.present}
 		if v["required"] == true {
@@ -214,6 +293,11 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 		if def, ok := v["default"]; ok {
 			tags = append(tags, "@default "+defaultWords(cv.typ, def))
 		}
+		ctags, err := constraintTags(dir, n, v)
+		if err != nil {
+			return nil, err
+		}
+		tags = append(tags, ctags...)
 		pic := ""
 		switch cv.typ {
 		case "string":
@@ -329,6 +413,64 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 	return d, nil
 }
 
+// constraintTags are the copybook tags for a case variable's rules, so
+// the generated loader checks them too, as it does for an app.
+func constraintTags(dir, name string, v map[string]any) ([]string, error) {
+	var tags []string
+	num := func(k, tag string) {
+		if x, ok := v[k]; ok {
+			tags = append(tags, tag+" "+fmt.Sprint(x))
+		}
+	}
+	if v["secret"] == true {
+		tags = append(tags, "@secret")
+	}
+	switch v["type"] {
+	case "string":
+		num("minLength", "@min-length")
+		num("maxLength", "@max-length")
+		if p, ok := v["pattern"].(string); ok {
+			tags = append(tags, "@pattern "+quote(p))
+		}
+	case "url":
+		num("maxLength", "@max-length")
+		if sc, ok := v["schemes"].([]any); ok {
+			var w []string
+			for _, x := range sc {
+				w = append(w, x.(string))
+			}
+			tags = append(tags, "@schemes "+strings.Join(w, " "))
+		}
+	case "json":
+		num("maxLength", "@max-length")
+		if sc, ok := v["schema"]; ok {
+			b, err := json.Marshal(sc)
+			if err != nil {
+				return nil, err
+			}
+			f := strings.ToLower(name) + ".schema.json"
+			if err := os.WriteFile(filepath.Join(dir, f), b, 0o644); err != nil {
+				return nil, err
+			}
+			tags = append(tags, "@schema "+f)
+		}
+	case "int", "float":
+		num("min", "@min")
+		num("max", "@max")
+	case "duration":
+		num("min", "@min")
+		num("max", "@max")
+	case "list":
+		num("minItems", "@min-items")
+		num("maxItems", "@max-items")
+		num("itemMin", "@item-min")
+		num("itemMax", "@item-max")
+		num("itemMinLength", "@item-min-length")
+		num("itemMaxLength", "@item-max-length")
+	}
+	return tags, nil
+}
+
 func display(typ, field, prefix string) string {
 	switch typ {
 	case "int", "duration":
@@ -354,6 +496,29 @@ func defaultWords(typ string, def any) string {
 		return quote(string(b))
 	}
 	return quote(fmt.Sprint(def))
+}
+
+// runLoader starts the driver without docuconf exec, so only the COBOL
+// loader checks env. The driver exits 3 when the loader reports a problem.
+func (d *driver) runLoader(t *testing.T, env map[string]string) (stdout, stderr string, code int) {
+	t.Helper()
+	cmd := exec.Command(d.bin)
+	cmd.Dir = d.dir
+	cmd.Env = []string{"DOCUCONF_TERMINATION_LOG=-"}
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	var o, e bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &o, &e
+	err := cmd.Run()
+	var ee *exec.ExitError
+	switch {
+	case errors.As(err, &ee):
+		code = ee.ExitCode()
+	case err != nil:
+		t.Fatal(err)
+	}
+	return o.String(), e.String(), code
 }
 
 // run starts docuconf exec on the driver with exactly env.

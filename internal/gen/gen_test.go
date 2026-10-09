@@ -289,6 +289,8 @@ func TestProblems(t *testing.T) {
 			`"1.5" is not an integer`},
 		{"collides with the loader", "      *> Name of the job\n      *> @env JOB_NAME\n           05  DC-NAME PIC X(20).\n",
 			"demo.cpy:5: DC-NAME is a name in the loader's working storage (DCRTWS); rename it"},
+		{"pattern not RE2", "      *> Region code\n      *> @pattern \"(?=x)\"\n           05  CFG-REGION PIC X(20).\n",
+			`@pattern "(?=x)" is not an RE2 pattern`},
 		{"lines in order", "      *> Pw\n      *> @secret  @default x\n           05  CFG-PWD PIC X(20).\n",
 			"demo.cpy:4: CFG-PWD: a @secret variable cannot have a default (@default); supply it from a Kubernetes Secret\ndemo.cpy:5: CFG-PWD: needs a description"},
 	} {
@@ -447,5 +449,35 @@ func TestDetails(t *testing.T) {
 	_, err = Build("demo.cpy", head+"      *> @details \"Without a description.\"\n           05  CFG-WORKERS PIC 9(2).\n", Options{})
 	if err == nil || !strings.Contains(err.Error(), "CFG-WORKERS: needs a description") {
 		t.Errorf("details without a description: %v", err)
+	}
+}
+
+// A pattern too large for the loader's tables is left to docuconf exec,
+// with a warning; one that fits is compiled into the loader.
+func TestPatternTables(t *testing.T) {
+	src := "      *> @service demo\n       01  DEMO-CONFIG.\n" +
+		"      *> Region code\n      *> @pattern \"^[a-z]{2}-[a-z]+-[0-9]$\"\n           05  CFG-REGION PIC X(20).\n" +
+		"      *> Free text\n      *> @pattern \"^.{1,500}$\"\n           05  CFG-NOTE PIC X(600).\n"
+	c, err := Build("demo.cpy", src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "CFG-NOTE: @pattern compiles to more than the loader's 1000 instructions") {
+		t.Errorf("warnings: %q", c.Warnings)
+	}
+	if c.Vars[0].Pattern == nil || c.Vars[1].Pattern != nil {
+		t.Errorf("patterns: %v, %v", c.Vars[0].Pattern, c.Vars[1].Pattern)
+	}
+	loader, err := c.Loader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(loader), "PERFORM DC-RX-MATCH"); n != 1 {
+		t.Errorf("the loader runs %d patterns, want 1", n)
+	}
+	// Case folding adds every equivalent: (?i)k also matches the Kelvin sign.
+	p, err := compileRE2("(?i)k")
+	if err != nil || p == nil || !strings.Contains(p.ranges, "00000750000075") || !strings.Contains(p.ranges, "00084900008490") {
+		t.Errorf("(?i)k: %+v %v", p, err)
 	}
 }

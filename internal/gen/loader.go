@@ -174,7 +174,7 @@ func (c *Config) Loader() ([]byte, error) {
 	e.comment("problem it prints every problem on stderr, writes them to")
 	e.comment("the termination log and sets RETURN-CODE to 1. Run the")
 	e.comment("program under docuconf exec, which also checks the rules")
-	e.comment("COBOL cannot (patterns, schemes, certificates) first.")
+	e.comment("COBOL cannot (patterns, JSON Schemas, files) first.")
 	e.b.WriteString(area + "IDENTIFICATION DIVISION.\n")
 	e.b.WriteString(area + "PROGRAM-ID. " + c.Program + ".\n")
 	e.b.WriteString(area + "ENVIRONMENT DIVISION.\n")
@@ -353,12 +353,27 @@ func (c *Config) loadVar(e *emitter, paras map[string]string, v *Var) {
 		}
 	}
 	e.line(0, "ELSE")
-	storeScalar(e, 1, v, v.Field, v.Field)
+	ind := 1
+	if v.Secret {
+		e.line(1, "PERFORM DC-CHECK-REF")
+		e.line(1, `IF DC-REF = "Y"`)
+		e.problem(2, refMsg, "invalid_type")
+		e.line(1, "ELSE")
+		ind = 2
+	}
+	storeScalar(e, ind, v, v.Field, v.Field)
+	if v.Secret {
+		e.line(1, "END-IF")
+	}
 	if v.Present != "" {
 		e.line(1, `MOVE "Y" TO `+v.Present)
 	}
 	e.line(0, "END-IF.")
 }
+
+// refMsg reports a secret that still holds an injector reference
+// (SPEC §4.5.1), without the reference.
+const refMsg = "holds an unresolved injector reference (vault:, op:// or ref+); the injector that should resolve it did not run"
 
 // defaultScalar moves the default into target.
 func defaultScalar(e *emitter, ind int, v *Var, target string) {
@@ -409,6 +424,7 @@ func storeScalar(e *emitter, ind int, v *Var, target, label string) {
 	case tString, tURL, tEnum, tJSON:
 		e.line(ind, fmt.Sprintf("IF DC-LEN > %d", v.Pic.Size))
 		e.problem(ind+1, fits, "out_of_range")
+		ends := valueChecks(e, ind, v, typ)
 		e.line(ind, "ELSE")
 		e.line(ind+1, "MOVE SPACES TO "+target)
 		e.line(ind+1, "IF DC-LEN > 0")
@@ -423,6 +439,9 @@ func storeScalar(e *emitter, ind int, v *Var, target, label string) {
 			e.line(ind+2, "WHEN OTHER")
 			e.problem(ind+3, "is not one of the enum's values", "not_in_enum")
 			e.line(ind+1, "END-EVALUATE")
+		}
+		for i := 0; i < ends; i++ {
+			e.line(ind, "END-IF")
 		}
 		e.line(ind, "END-IF")
 	case tInt:
@@ -532,6 +551,87 @@ func storeScalar(e *emitter, ind int, v *Var, target, label string) {
 	}
 }
 
+// valueChecks writes the checks of a string, url or json value in
+// DC-RAW(1:DC-LEN) that fits its field: a url's form and scheme, a json
+// value's syntax, and length limits in characters. Each check is an
+// ELSE IF after the field-size check, so a value gets one problem; it
+// returns how many END-IFs to close.
+func valueChecks(e *emitter, ind int, v *Var, typ string) int {
+	ends := 0
+	check := func(cond, msg, code string) {
+		e.line(ind, "ELSE")
+		e.line(ind, "IF "+cond)
+		e.problem(ind+1, msg, code)
+		ends++
+	}
+	switch typ {
+	case tURL:
+		e.line(ind, "ELSE")
+		e.line(ind, "PERFORM DC-CHECK-URL")
+		e.line(ind, `IF DC-OK = "N"`)
+		e.problem(ind+1, "is not a URL of the form scheme://...", "invalid_type")
+		ends++
+		if len(v.Schemes) > 0 {
+			var conds []string
+			for _, sc := range v.Schemes {
+				conds = append(conds, fmt.Sprintf("(DC-Q = %d AND FUNCTION LOWER-CASE(DC-RAW(1:DC-Q)) = %s)", len(sc), cobolLiteral(strings.ToLower(sc))))
+			}
+			check("NOT ("+strings.Join(conds, " OR ")+")", "scheme is not one of "+strings.Join(v.Schemes, ", "), "invalid_scheme")
+		}
+	case tJSON:
+		e.line(ind, "ELSE")
+		e.line(ind, "PERFORM DC-CHECK-JSON")
+		e.line(ind, `IF DC-OK = "N"`)
+		e.problem(ind+1, "is not valid JSON", "invalid_type")
+		ends++
+	}
+	lo, hi, what, minW, maxW := v.MinLen, v.MaxLen, "is", "minLength", "maxLength"
+	if v.Type == tList {
+		lo, hi, what, minW, maxW = v.ItemMinLen, v.ItemMaxLen, "has an item", "itemMinLength", "itemMaxLength"
+	}
+	if typ != tEnum && (lo != nil || hi != nil) {
+		e.line(ind, "ELSE")
+		e.line(ind, "PERFORM DC-COUNT-CHARS")
+		if lo != nil {
+			e.line(ind, fmt.Sprintf("IF DC-CHARS < %d", *lo))
+			e.problem(ind+1, fmt.Sprintf("%s shorter than %s %d characters", what, minW, *lo), "out_of_range")
+			ends++
+			if hi != nil {
+				e.line(ind, "ELSE")
+			}
+		}
+		if hi != nil {
+			e.line(ind, fmt.Sprintf("IF DC-CHARS > %d", *hi))
+			e.problem(ind+1, fmt.Sprintf("%s longer than %s %d characters", what, maxW, *hi), "out_of_range")
+			ends++
+		}
+	}
+	if typ == tString && v.Type == tString && v.Pattern != nil {
+		// The pattern's program, compiled by generate (regex.go).
+		e.line(ind, "ELSE")
+		e.table(ind, v.Pattern.insts, "DC-RX-PROG")
+		if v.Pattern.ranges != "" {
+			e.table(ind, v.Pattern.ranges, "DC-RX-RANGES")
+		}
+		e.line(ind, fmt.Sprintf("MOVE %d TO DC-RX-N", v.Pattern.n))
+		e.line(ind, fmt.Sprintf("MOVE %d TO DC-RX-START", v.Pattern.start))
+		e.line(ind, "PERFORM DC-RX-MATCH")
+		e.line(ind, `IF DC-RX-OK = "N"`)
+		e.problem(ind+1, "does not match its pattern", "pattern_mismatch")
+		ends++
+	}
+	return ends
+}
+
+// table moves data, a table's text, into target in pieces that fit a
+// line.
+func (e *emitter) table(ind int, data, target string) {
+	for i := 0; i < len(data); i += 40 {
+		j := min(i+40, len(data))
+		e.line(ind, fmt.Sprintf("MOVE %s TO %s(%d:%d)", cobolLiteral(data[i:j]), target, i+1, j-i))
+	}
+}
+
 // boundChecks reports a value below lo or above hi (each "" for none).
 // The value is not shown: it may be a secret.
 func boundChecks(e *emitter, ind int, value, lo, hi string, item bool) {
@@ -561,7 +661,11 @@ func (c *Config) loadList(e *emitter, itemPara string, v *Var) {
 	item := v.Field + "(DC-K)"
 	e.line(0, fmt.Sprintf("MOVE %d TO DC-ITEM-LIMIT", v.Occurs))
 	if v.Encoding == "indexed" {
+		e.line(0, "MOVE DC-PROBLEMS TO DC-PROBLEMS-AT")
 		e.line(0, "PERFORM DC-READ-INDEXED")
+		e.line(0, "IF DC-PROBLEMS = DC-PROBLEMS-AT")
+		e.line(1, "PERFORM DC-INDEXED-GAP")
+		e.line(0, "END-IF")
 	} else {
 		e.line(0, "PERFORM DC-GET-ENV")
 		e.line(0, "IF DC-LEN = 0")
@@ -595,13 +699,35 @@ func (c *Config) loadList(e *emitter, itemPara string, v *Var) {
 		e.line(1, fmt.Sprintf(`MOVE %q TO %s`, map[bool]string{true: "Y", false: "N"}[v.Default != nil], v.Present))
 	}
 	e.line(0, "ELSE")
+	split := 1
+	if v.Secret && v.Encoding != "indexed" {
+		e.line(1, "PERFORM DC-CHECK-REF")
+		e.line(1, `IF DC-REF = "Y"`)
+		e.problem(2, refMsg, "invalid_type")
+		e.line(1, "ELSE")
+		split = 2
+	}
 	switch v.Encoding {
 	case "csv":
-		e.move(1, v.Separator, "DC-SEP")
-		e.line(1, fmt.Sprintf("MOVE %d TO DC-SEP-LEN", len(v.Separator)))
-		e.line(1, "PERFORM DC-SPLIT-CSV")
+		e.move(split, v.Separator, "DC-SEP")
+		e.line(split, fmt.Sprintf("MOVE %d TO DC-SEP-LEN", len(v.Separator)))
+		e.line(split, "PERFORM DC-SPLIT-CSV")
 	case "json":
-		e.line(1, "PERFORM DC-SPLIT-JSON")
+		e.line(split, "PERFORM DC-SPLIT-JSON")
+	}
+	if split == 2 {
+		e.line(1, "END-IF")
+	}
+	if v.Secret && v.Encoding == "indexed" {
+		e.line(1, `MOVE "N" TO DC-REF`)
+		e.line(1, "PERFORM VARYING DC-K FROM 1 BY 1")
+		e.line(3, `UNTIL DC-K > DC-ITEM-COUNT OR DC-REF = "Y"`)
+		e.line(2, "PERFORM DC-ITEM-TO-RAW")
+		e.line(2, "PERFORM DC-CHECK-REF")
+		e.line(1, "END-PERFORM")
+		e.line(1, `IF DC-REF = "Y"`)
+		e.problem(2, refMsg, "invalid_type")
+		e.line(1, "END-IF")
 	}
 	e.line(1, `IF DC-OK = "Y"`)
 	if v.MinItems > 0 {

@@ -77,13 +77,23 @@ type Var struct {
 	Min, Max       *big.Int
 	MinRat, MaxRat *big.Rat
 	MinNs, MaxNs   *int64
-	MinItems       int      // 0 when there is no minimum
-	MaxItems       int      // below Occurs when @max-items narrows it, else 0
-	Values         []string // enum values
-	Conds          []string // the enum's level-88 names
-	Unit           string   // duration field unit
-	UnitNs         int64
-	Encoding       string // list or duration wire encoding
+	// Length limits in characters (Unicode code points), which the
+	// loader counts: MinLen and MaxLen for a string, MaxLen for a url or
+	// json value, ItemMinLen and ItemMaxLen for a string list's items.
+	// MaxLen and ItemMaxLen are nil when they are the PIC size, which the
+	// loader checks in bytes anyway. Schemes are a url's allowed schemes.
+	MinLen, MaxLen         *int
+	ItemMinLen, ItemMaxLen *int
+	Schemes                []string
+	// Pattern is a string's @pattern compiled for the loader, or nil.
+	Pattern  *rxProg
+	MinItems int      // 0 when there is no minimum
+	MaxItems int      // below Occurs when @max-items narrows it, else 0
+	Values   []string // enum values
+	Conds    []string // the enum's level-88 names
+	Unit     string   // duration field unit
+	UnitNs   int64
+	Encoding string // list or duration wire encoding
 	// lists
 	Items     string
 	Separator string
@@ -669,6 +679,9 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 				fail("@max-length %d is more than PIC %s holds", m, e.Pic)
 			default:
 				n = m
+				if m < pic.Size {
+					v.MaxLen = &m
+				}
 			}
 		}
 		return int64(n)
@@ -686,15 +699,26 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 					fail("@min-length must be a non-negative integer")
 				}
 				o["minLength"] = int64(n)
+				v.MinLen = &n
 			}
 			if s, ok := single("pattern"); ok {
 				o["pattern"] = s
+				prog, err := compileRE2(s)
+				switch {
+				case err != nil:
+					fail("@pattern %q is not an RE2 pattern: %v", s, err)
+				case prog == nil:
+					b.c.Warnings = append(b.c.Warnings, fmt.Sprintf("%s:%d: warning: %s: @pattern compiles to more than the loader's %d instructions or %d character ranges; only docuconf exec checks it", b.c.Copybook, e.Line, e.Name, rxMaxInsts, rxMaxRanges))
+				default:
+					v.Pattern = prog
+				}
 			}
 		}
 	case tURL:
 		allow("schemes", "maxlength")
 		if t, ok := d.get("schemes"); ok {
 			o["schemes"] = toAny(t.values)
+			v.Schemes = t.values
 		}
 		o["maxLength"] = fieldLength()
 	case tEnum:
@@ -939,6 +963,9 @@ func (b *builder) list(e *copybook.Entry, d doc, v *Var, o map[string]any, singl
 				fail("@item-max-length %d is more than PIC %s holds", n, e.Pic)
 			default:
 				hi = n
+				if n < v.Pic.Size {
+					v.ItemMaxLen = &n
+				}
 			}
 		}
 		o["itemMaxLength"] = int64(hi)
@@ -951,6 +978,7 @@ func (b *builder) list(e *copybook.Entry, d doc, v *Var, o map[string]any, singl
 				fail("@item-min-length %d is above the item maximum length %d", n, hi)
 			default:
 				o["itemMinLength"] = int64(n)
+				v.ItemMinLen = &n
 			}
 		}
 	}
