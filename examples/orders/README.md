@@ -10,9 +10,10 @@
 | `ALLOWED_ORIGINS` | `CFG-ALLOWED-ORIGINS PIC X(64) OCCURS 8` | list of strings, 1 to 8 items; default `["http://localhost:3000"]` |
 | `REQUEST_TIMEOUT` | `CFG-REQUEST-TIMEOUT PIC 9(6)`, in milliseconds | duration, 1s to 5m, default `30s` |
 | `WORKER_COUNT` | `CFG-WORKER-COUNT PIC 9(2)` | 1 to 64, default 4 |
+| `WEBHOOK_KEYS` | `CFG-WEBHOOK-KEYS PIC X(256) OCCURS 2` | list of strings, secret, optional; 1 to 2 keys of 32 to 256 characters each |
 | file `orders` | `CFG-ORDERS-PATH PIC X(256)` receives its path | text, required, at most 1 MiB, at `/data/orders.txt` or `ORDERS_FILE` |
 
-These are the six variables every docuconf SDK's orders example uses. A batch job serves no HTTP, so `PORT` here is the port of a Prometheus metrics endpoint that this job does not open yet; it is kept so the contract matches the other languages' examples, and the job prints it. `DATABASE_URL` and `REQUEST_TIMEOUT` describe the database the job would write its summary to; this example prints the summary instead.
+These are the seven variables every docuconf SDK's orders example uses. A batch job serves no HTTP, so `PORT` here is the port of a Prometheus metrics endpoint that this job does not open yet; it is kept so the contract matches the other languages' examples, and the job prints it. `DATABASE_URL` and `REQUEST_TIMEOUT` describe the database the job would write its summary to; this example prints the summary instead. `WEBHOOK_KEYS` is used by [`PAYHOOK.cbl`](PAYHOOK.cbl), which checks the signature on a payment webhook (see [Rotate a key](#rotate-a-key)).
 
 ## 1. Annotate the copybook
 
@@ -86,6 +87,7 @@ orders-batch configuration:
   ALLOWED_ORIGINS http://localhost:3000
   REQUEST_TIMEOUT 30000ms
   WORKER_COUNT    4
+  WEBHOOK_KEYS    ***
   orders file     orders.txt
 summary:
   orders read     5
@@ -116,6 +118,59 @@ For a local run, keep the variables in a `.env` file: `docuconf exec -env-file .
 DOCUCONF=/path/to/docuconf examples/orders/smoke.sh
 DOCUCONF=/path/to/docuconf examples/orders/test-config.sh
 ```
+
+## Rotate a key
+
+`WEBHOOK_KEYS` is a key set: a webhook is accepted when its signature, the hex HMAC-SHA256 of its body, was made with any key in the list. A batch job has no HTTP endpoint, so where a service would answer `POST /webhooks/payments` with an `X-Signature` header, the webhook receiver runs [`PAYHOOK.cbl`](PAYHOOK.cbl) once per webhook, with the body on standard input and the signature as its argument. It exits 0 for a good signature and 2 for a bad one. It calls OpenSSL's libcrypto for the HMAC and for a constant-time comparison, and checks every key:
+
+```sh
+cobc -x -fstatic-call -o payhook PAYHOOK.cbl ORDCFG.cbl -lcrypto
+body='{"order":"42","status":"paid"}'
+sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac new-webhook-key-0123456789abcdef0123 | sed 's/.*= //')
+printf '%s\n' "$body" | DATABASE_URL=postgres://orders:s3cret@db:5432/orders ORDERS_FILE=orders.txt \
+  WEBHOOK_KEYS=old-webhook-key-0123456789abcdef0123,new-webhook-key-0123456789abcdef0123 \
+  docuconf exec -contract contract.cue -- ./payhook "$sig"
+```
+
+```text
+payhook: accepted
+```
+
+A variable is read once, at start, so a new key reaches the job only on its next run; with two keys valid at once, no webhook is turned away while that happens:
+
+1. Add the new key as the second item (`old,new` in the Secret), and roll out.
+2. Switch the sender to the new key.
+3. Remove the old key (`new`), and roll out.
+
+The copybook declares the set as a secret list of at most two entries, each at least 32 characters (the PIC sets the maximum, 256):
+
+```cobol
+      *> @secret  @min-items 1  @item-min-length 32
+      *> @count CFG-WEBHOOK-KEY-COUNT
+           05  CFG-WEBHOOK-KEYS        PIC X(256) OCCURS 2 TIMES.
+           05  CFG-WEBHOOK-KEY-COUNT   PIC 9.
+```
+
+So a trailing comma or a truncated key stops the job at boot instead of locking out the sender, and the key is never printed:
+
+```sh
+DATABASE_URL=postgres://orders:s3cret@db:5432/orders ORDERS_FILE=orders.txt \
+  WEBHOOK_KEYS=old-webhook-key-0123456789abcdef0123, docuconf exec -contract contract.cue -- ./orders-batch
+```
+
+```text
+docuconf: 1 configuration problem:
+  WEBHOOK_KEYS: item 1: value is 0 characters, below itemMinLength 32 (out_of_range)
+```
+
+The loader leaves item lengths below the PIC size to `docuconf exec`, so PAYHOOK also skips a key shorter than 32 characters: run without `docuconf exec`, an empty key would otherwise let anyone sign. In a values file, the key set is a `secretKeyRef`:
+
+```yaml
+WEBHOOK_KEYS: # a key set: one Secret key holding "old,new" while rotating
+  secretKeyRef: {name: orders-webhooks, key: keys}
+```
+
+[`smoke.sh`](smoke.sh) runs PAYHOOK with both keys, another key and no signature. [SPEC section 6.1](https://github.com/docuconf/docuconf-go/blob/main/spec/SPEC.md#61-rotation) covers rotation in general.
 
 ## 6. Deploy
 

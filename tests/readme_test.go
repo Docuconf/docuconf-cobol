@@ -81,7 +81,7 @@ func TestREADMESnippets(t *testing.T) {
 
 	example := "../examples/orders"
 	sources := map[string][]string{
-		"cobol":      {example + "/orders-config.cpy", example + "/ORDERS-BATCH.cbl", example + "/CFGTEST.cbl"},
+		"cobol":      {example + "/orders-config.cpy", example + "/ORDERS-BATCH.cbl", example + "/CFGTEST.cbl", example + "/PAYHOOK.cbl"},
 		"dockerfile": {example + "/Dockerfile"},
 	}
 	scripts := readFile(t, example+"/smoke.sh") + readFile(t, example+"/test-config.sh")

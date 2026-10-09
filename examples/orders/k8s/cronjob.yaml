@@ -28,6 +28,11 @@ spec:
                     secretKeyRef:
                       name: orders-db
                       key: url
+                - name: WEBHOOK_KEYS
+                  valueFrom:
+                    secretKeyRef:
+                      name: orders-webhooks
+                      key: keys
                 - name: ORDERS_FILE
                   value: /data/orders.txt
               volumeMounts:

@@ -2,3 +2,5 @@
 DATABASE_URL:
   secretKeyRef: {name: orders-db, key: url}
 ALLOWED_ORIGINS: [https://shop.example.com, http://localhost:3000]
+WEBHOOK_KEYS: # a key set: one Secret key holding "old,new" while rotating
+  secretKeyRef: {name: orders-webhooks, key: keys}

@@ -43,10 +43,10 @@ jobs:
           go-version: "1.25"
       - name: go.mod and .github/docuconf-go.ref pin the same docuconf-go
         run: scripts/check-docuconf-go-pin.sh
-      - name: Install GnuCOBOL and cue
+      - name: Install GnuCOBOL, libcrypto (for PAYHOOK) and cue
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gnucobol3
+          sudo apt-get install -y -qq gnucobol3 libssl-dev
           go install cuelang.org/go/cmd/cue@v0.17.1
       - name: Build the docuconf CLI from docuconf-go
         working-directory: docuconf-go/cmd/docuconf
