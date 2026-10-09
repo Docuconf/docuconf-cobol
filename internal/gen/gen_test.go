@@ -289,6 +289,26 @@ func TestProblems(t *testing.T) {
 			`"1.5" is not an integer`},
 		{"collides with the loader", "      *> Name of the job\n      *> @env JOB_NAME\n           05  DC-NAME PIC X(20).\n",
 			"demo.cpy:5: DC-NAME is a name in the loader's working storage (DCRTWS); rename it"},
+		{"pattern not RE2", "      *> Region code\n      *> @pattern \"(?=x)\"\n           05  CFG-REGION PIC X(20).\n",
+			`@pattern "(?=x)" is not an RE2 pattern`},
+		{"key set without a table", "      *> Webhook keys\n      *> @type keySet\n           05  CFG-KEYS PIC X(40).\n",
+			"a keySet is a table of keys: PIC X(n) OCCURS m, with @count"},
+		{"key set with a default", "      *> Webhook keys\n      *> @type keySet  @count CFG-N  @default abc\n           05  CFG-KEYS PIC X(40) OCCURS 2.\n           05  CFG-N PIC 9.\n",
+			"a @secret variable cannot have a default"},
+		{"key set with no keys", "      *> Webhook keys\n      *> @type keySet  @count CFG-N  @min-keys 0\n           05  CFG-KEYS PIC X(40) OCCURS 2.\n           05  CFG-N PIC 9.\n",
+			"@min-keys must be at least 1"},
+		{"list tags on a key set", "      *> Webhook keys\n      *> @type keySet  @count CFG-N  @min-items 1\n           05  CFG-KEYS PIC X(40) OCCURS 2.\n           05  CFG-N PIC 9.\n",
+			"@min-items does not apply to a keySet variable"},
+		{"key max length beyond PIC", "      *> Webhook keys\n      *> @type keySet  @count CFG-N  @key-max-length 50\n           05  CFG-KEYS PIC X(40) OCCURS 2.\n           05  CFG-N PIC 9.\n",
+			"@key-max-length 50 is more than PIC X(40) holds"},
+		{"key set of ints", "      *> Webhook keys\n      *> @type keySet  @count CFG-N\n           05  CFG-KEYS PIC 9(4) OCCURS 2.\n           05  CFG-N PIC 9.\n",
+			"a keySet is a table of keys"},
+		{"required and deprecated", "      *> Old port to listen on\n      *> @required  @deprecated \"Use PORT instead\"\n           05  CFG-OLD-PORT PIC 9(5).\n",
+			"CFG-OLD-PORT: a @required variable cannot be @deprecated"},
+		{"blank deprecation", "      *> Old port to listen on\n      *> @deprecated \" \"\n           05  CFG-OLD-PORT PIC 9(5).\n",
+			"@deprecated must say what to use instead, or why the variable is going away"},
+		{"replaced-by without deprecated", "      *> Old port to listen on\n      *> @replaced-by PORT\n           05  CFG-OLD-PORT PIC 9(5).\n",
+			"@replaced-by needs @deprecated"},
 		{"lines in order", "      *> Pw\n      *> @secret  @default x\n           05  CFG-PWD PIC X(20).\n",
 			"demo.cpy:4: CFG-PWD: a @secret variable cannot have a default (@default); supply it from a Kubernetes Secret\ndemo.cpy:5: CFG-PWD: needs a description"},
 	} {
@@ -447,5 +467,35 @@ func TestDetails(t *testing.T) {
 	_, err = Build("demo.cpy", head+"      *> @details \"Without a description.\"\n           05  CFG-WORKERS PIC 9(2).\n", Options{})
 	if err == nil || !strings.Contains(err.Error(), "CFG-WORKERS: needs a description") {
 		t.Errorf("details without a description: %v", err)
+	}
+}
+
+// A pattern too large for the loader's tables is left to docuconf exec,
+// with a warning; one that fits is compiled into the loader.
+func TestPatternTables(t *testing.T) {
+	src := "      *> @service demo\n       01  DEMO-CONFIG.\n" +
+		"      *> Region code\n      *> @pattern \"^[a-z]{2}-[a-z]+-[0-9]$\"\n           05  CFG-REGION PIC X(20).\n" +
+		"      *> Free text\n      *> @pattern \"^.{1,500}$\"\n           05  CFG-NOTE PIC X(600).\n"
+	c, err := Build("demo.cpy", src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "CFG-NOTE: @pattern compiles to more than the loader's 1000 instructions") {
+		t.Errorf("warnings: %q", c.Warnings)
+	}
+	if c.Vars[0].Pattern == nil || c.Vars[1].Pattern != nil {
+		t.Errorf("patterns: %v, %v", c.Vars[0].Pattern, c.Vars[1].Pattern)
+	}
+	loader, err := c.Loader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(loader), "PERFORM DC-RX-MATCH"); n != 1 {
+		t.Errorf("the loader runs %d patterns, want 1", n)
+	}
+	// Case folding adds every equivalent: (?i)k also matches the Kelvin sign.
+	p, err := compileRE2("(?i)k")
+	if err != nil || p == nil || !strings.Contains(p.ranges, "00000750000075") || !strings.Contains(p.ranges, "00084900008490") {
+		t.Errorf("(?i)k: %+v %v", p, err)
 	}
 }

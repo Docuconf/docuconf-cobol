@@ -27,6 +27,9 @@ func (c *Config) ContractJSON() ([]byte, error) {
 		},
 		"vars": vars,
 	}
+	if c.AppVersion != "" {
+		doc["metadata"].(map[string]any)["appVersion"] = c.AppVersion
+	}
 	if len(c.Files) > 0 {
 		files := map[string]any{}
 		for _, f := range c.Files {

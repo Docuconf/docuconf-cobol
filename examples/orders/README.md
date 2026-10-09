@@ -10,7 +10,7 @@
 | `ALLOWED_ORIGINS` | `CFG-ALLOWED-ORIGINS PIC X(64) OCCURS 8` | list of strings, 1 to 8 items; default `["http://localhost:3000"]` |
 | `REQUEST_TIMEOUT` | `CFG-REQUEST-TIMEOUT PIC 9(6)`, in milliseconds | duration, 1s to 5m, default `30s` |
 | `WORKER_COUNT` | `CFG-WORKER-COUNT PIC 9(2)` | 1 to 64, default 4 |
-| `WEBHOOK_KEYS` | `CFG-WEBHOOK-KEYS PIC X(256) OCCURS 2` | list of strings, secret, optional; 1 to 2 keys of 32 to 256 characters each |
+| `WEBHOOK_KEYS` | `CFG-WEBHOOK-KEYS PIC X(256) OCCURS 2` | key set (always secret), optional; 1 to 2 keys of 32 to 256 characters each |
 | file `orders` | `CFG-ORDERS-PATH PIC X(256)` receives its path | text, required, at most 1 MiB, at `/data/orders.txt` or `ORDERS_FILE` |
 
 These are the seven variables every docuconf SDK's orders example uses. A batch job serves no HTTP, so `PORT` here is the port of a Prometheus metrics endpoint that this job does not open yet; it is kept so the contract matches the other languages' examples, and the job prints it. `DATABASE_URL` and `REQUEST_TIMEOUT` describe the database the job would write its summary to; this example prints the summary instead. `WEBHOOK_KEYS` is used by [`PAYHOOK.cbl`](PAYHOOK.cbl), which checks the signature on a payment webhook (see [Rotate a key](#rotate-a-key)).
@@ -107,7 +107,7 @@ docuconf: 2 configuration problems:
   PORT: 0 is below min 1 (out_of_range)
 ```
 
-The same lines go to the termination log, so `kubectl describe pod` shows them. Run the job without `docuconf exec` and the loader still refuses `PORT=0` (it checks `@min` and `@max`); what it leaves to `docuconf exec` is the URL scheme of `DATABASE_URL` and the orders file itself.
+The same lines go to the termination log, so `kubectl describe pod` shows them. Run the job without `docuconf exec` and the loader still refuses `PORT=0`: it checks every rule of a variable, the URL scheme of `DATABASE_URL` included. What it leaves to `docuconf exec` is the orders file itself.
 
 For a local run, keep the variables in a `.env` file: `docuconf exec -env-file .env` checks its values and passes them to the job (a variable already set in the environment wins). `docuconf check -contract contract.cue` runs the same checks without starting anything, for an init container or CI.
 
@@ -142,10 +142,10 @@ A variable is read once, at start, so a new key reaches the job only on its next
 2. Switch the sender to the new key.
 3. Remove the old key (`new`), and roll out.
 
-The copybook declares the set as a secret list of at most two entries, each at least 32 characters (the PIC sets the maximum, 256):
+`docuconf docs` prints these steps for every key set, so the copybook's comment does not repeat them. The copybook declares `WEBHOOK_KEYS` as a `keySet` of at most two keys (the `OCCURS`), each at least 32 characters (the PIC sets the maximum, 256). A key set is always secret, and holds at least one key:
 
 ```cobol
-      *> @secret  @min-items 1  @item-min-length 32
+      *> @type keySet  @key-min-length 32
       *> @count CFG-WEBHOOK-KEY-COUNT
            05  CFG-WEBHOOK-KEYS        PIC X(256) OCCURS 2 TIMES.
            05  CFG-WEBHOOK-KEY-COUNT   PIC 9.
@@ -160,10 +160,10 @@ DATABASE_URL=postgres://orders:s3cret@db:5432/orders ORDERS_FILE=orders.txt \
 
 ```text
 docuconf: 1 configuration problem:
-  WEBHOOK_KEYS: item 1: value is 0 characters, below itemMinLength 32 (out_of_range)
+  WEBHOOK_KEYS: key 1 is empty (out_of_range)
 ```
 
-The loader leaves item lengths below the PIC size to `docuconf exec`, so PAYHOOK also skips a key shorter than 32 characters: run without `docuconf exec`, an empty key would otherwise let anyone sign. In a values file, the key set is a `secretKeyRef`:
+The loader alone stops the job too: it rejects an empty key whatever the bounds, a key outside 32 to 256 characters and a third key. COBOL has no constant-time comparison, so PAYHOOK compares with OpenSSL's `CRYPTO_memcmp`, tries every key without stopping at the first match, and skips a key shorter than 32 characters as a last line of defence. In a values file, the key set is a `secretKeyRef`:
 
 ```yaml
 WEBHOOK_KEYS: # a key set: one Secret key holding "old,new" while rotating

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/docuconf/docuconf-cobol/internal/copybook"
 )
@@ -28,6 +29,7 @@ const (
 	tURL      = "url"
 	tEnum     = "enum"
 	tList     = "list"
+	tKeySet   = "keySet"
 	tJSON     = "json"
 )
 
@@ -49,6 +51,8 @@ type Config struct {
 	Service string
 	Package string
 	Program string
+	// AppVersion is @app-version: the contract's metadata.appVersion.
+	AppVersion string
 	// Runtime is how the loader gets the docuconf runtime: "inline"
 	// (the default) or "copy" (COPY DCRTWS and DCRTPD).
 	Runtime  string
@@ -77,13 +81,26 @@ type Var struct {
 	Min, Max       *big.Int
 	MinRat, MaxRat *big.Rat
 	MinNs, MaxNs   *int64
-	MinItems       int      // 0 when there is no minimum
-	MaxItems       int      // below Occurs when @max-items narrows it, else 0
-	Values         []string // enum values
-	Conds          []string // the enum's level-88 names
-	Unit           string   // duration field unit
-	UnitNs         int64
-	Encoding       string // list or duration wire encoding
+	// Length limits in characters (Unicode code points), which the
+	// loader counts: MinLen and MaxLen for a string, MaxLen for a url or
+	// json value, ItemMinLen and ItemMaxLen for a string list's items.
+	// MaxLen and ItemMaxLen are nil when they are the PIC size, which the
+	// loader checks in bytes anyway. Schemes are a url's allowed schemes.
+	MinLen, MaxLen         *int
+	ItemMinLen, ItemMaxLen *int
+	Schemes                []string
+	// Pattern is a string's @pattern compiled for the loader, or nil.
+	Pattern *rxProg
+	// Deprecated is the @deprecated message, which the loader prints in
+	// a warning when the variable is set; ReplacedBy is @replaced-by.
+	Deprecated, ReplacedBy string
+	MinItems               int      // 0 when there is no minimum
+	MaxItems               int      // below Occurs when @max-items narrows it, else 0
+	Values                 []string // enum values
+	Conds                  []string // the enum's level-88 names
+	Unit                   string   // duration field unit
+	UnitNs                 int64
+	Encoding               string // list or duration wire encoding
 	// lists
 	Items     string
 	Separator string
@@ -93,6 +110,10 @@ type Var struct {
 
 	contract map[string]any
 }
+
+// isList reports whether v is read into an OCCURS table: a list, or a
+// keySet's keys.
+func (v *Var) isList() bool { return v.Type == tList || v.Type == tKeySet }
 
 // FileInput is one file input, whose effective path goes into a field.
 type FileInput struct {
@@ -226,10 +247,11 @@ func Build(path, src string, opts Options) (*Config, error) {
 	c.Service = firstOf(opts.Service, one(rd, "service"))
 	c.Program = strings.ToUpper(firstOf(opts.Program, one(rd, "program"), defaultProgram(name, c.Record)))
 	c.Package = firstOf(opts.Package, one(rd, "package"))
+	c.AppVersion = one(rd, "appversion")
 	prefix := strings.ToUpper(firstOf(opts.Prefix, one(rd, "prefix")))
 	for _, t := range rd.tags {
 		if !slices.Contains(recordTags, t.name) {
-			p.add(t.line, "%s does not apply to the level-01 record; it takes @service, @program, @package and @prefix%s", t.as, suggest(t.name, recordTags))
+			p.add(t.line, "%s does not apply to the level-01 record; it takes @service, @program, @package, @prefix and @app-version%s", t.as, suggest(t.name, recordTags))
 		}
 	}
 	recName := c.Record
@@ -498,7 +520,8 @@ func (b *builder) item(e *copybook.Entry, group string) {
 var knownVarTags = []string{"env", "desc", "details", "type", "secret", "required", "default", "min", "max",
 	"minlength", "maxlength", "pattern", "schemes", "values", "minitems", "maxitems", "itemmin",
 	"itemmax", "itemminlength", "itemmaxlength", "encoding", "separator", "unit", "count", "present",
-	"examples", "deprecated", "group", "schema", "configkey"}
+	"examples", "deprecated", "replacedby", "group", "schema", "configkey", "minkeys", "maxkeys",
+	"keyminlength", "keymaxlength"}
 
 func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	p := b.p
@@ -564,8 +587,10 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	if group != "" {
 		o["group"] = group
 	}
-	if s, ok := single("deprecated"); ok {
-		o["deprecated"] = map[string]any{"message": s}
+	if dep := b.deprecated(e, d, v.Required, "variable"); dep != nil {
+		o["deprecated"] = dep
+		v.Deprecated = dep["message"].(string)
+		v.ReplacedBy, _ = dep["replacedBy"].(string)
 	}
 	if s, ok := single("configkey"); ok {
 		o["configKey"] = s
@@ -584,6 +609,9 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	v.Double = e.Usage == "COMP-1" || e.Usage == "COMP-2" || e.Usage == "FLOAT-SHORT" || e.Usage == "FLOAT-LONG"
 	conds := e.Conditions()
 	typ, _ := single("type")
+	if strings.EqualFold(typ, tKeySet) {
+		typ = tKeySet
+	}
 	_, hasUnit := d.get("unit")
 	switch {
 	case typ != "":
@@ -598,18 +626,27 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 	default:
 		typ = tInt
 	}
-	if e.Occurs > 0 {
+	switch {
+	case typ == tKeySet && (e.Occurs == 0 || !pic.Alpha):
+		fail("a keySet is a table of keys: PIC X(n) OCCURS m, with @count")
+		return
+	case typ == tKeySet:
+		// Always secret (SPEC section 4.3): no default, no examples.
+		v.Type, v.Items, v.Secret = tKeySet, tString, true
+		o["secret"] = true
+		typ = tString
+	case e.Occurs > 0:
 		v.Items = typ
 		v.Type = tList
 		if typ != tString && typ != tInt {
 			fail("a list (OCCURS) holds strings (PIC X) or integers (PIC 9); %s items are not supported", typ)
 			return
 		}
-	} else {
+	default:
 		v.Type = typ
 	}
 	if !slices.Contains([]string{tString, tInt, tFloat, tBool, tDuration, tURL, tEnum, tJSON}, typ) {
-		fail("@type %s is not one of string, int, float, bool, duration, url, enum, json", typ)
+		fail("@type %s is not one of string, int, float, bool, duration, url, enum, json, keySet", typ)
 		return
 	}
 	scalar := typ
@@ -641,7 +678,7 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 			allowed[t] = true
 		}
 	}
-	allow("env", "desc", "details", "type", "secret", "required", "default", "examples", "deprecated", "group", "present", "configkey")
+	allow("env", "desc", "details", "type", "secret", "required", "default", "examples", "deprecated", "replacedby", "group", "present", "configkey")
 
 	// Presence flag.
 	if f, ok := single("present"); ok {
@@ -669,6 +706,9 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 				fail("@max-length %d is more than PIC %s holds", m, e.Pic)
 			default:
 				n = m
+				if m < pic.Size {
+					v.MaxLen = &m
+				}
 			}
 		}
 		return int64(n)
@@ -686,15 +726,26 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 					fail("@min-length must be a non-negative integer")
 				}
 				o["minLength"] = int64(n)
+				v.MinLen = &n
 			}
 			if s, ok := single("pattern"); ok {
 				o["pattern"] = s
+				prog, err := compileRE2(s)
+				switch {
+				case err != nil:
+					fail("@pattern %q is not an RE2 pattern: %v", s, err)
+				case prog == nil:
+					b.c.Warnings = append(b.c.Warnings, fmt.Sprintf("%s:%d: warning: %s: @pattern compiles to more than the loader's %d instructions or %d character ranges; only docuconf exec checks it", b.c.Copybook, e.Line, e.Name, rxMaxInsts, rxMaxRanges))
+				default:
+					v.Pattern = prog
+				}
 			}
 		}
 	case tURL:
 		allow("schemes", "maxlength")
 		if t, ok := d.get("schemes"); ok {
 			o["schemes"] = toAny(t.values)
+			v.Schemes = t.values
 		}
 		o["maxLength"] = fieldLength()
 	case tEnum:
@@ -844,6 +895,9 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 			fail("VALUE %s and @default %s disagree; keep one of them", strings.Join(words, " "), strings.Join(v.Default, " "))
 		}
 	}
+	if t, ok := d.get("examples"); ok && v.Secret {
+		p.add(t.line, "%s: a secret has no examples, so none can leak into docs", e.Name)
+	}
 	if v.Default != nil {
 		switch {
 		case v.Secret:
@@ -865,12 +919,27 @@ func (b *builder) variable(e *copybook.Entry, d doc, group string) {
 
 func (b *builder) list(e *copybook.Entry, d doc, v *Var, o map[string]any, single func(string) (string, bool), allow func(...string)) {
 	fail := func(format string, args ...any) { b.p.add(e.Line, "%s: %s", e.Name, fmt.Sprintf(format, args...)) }
-	allow("encoding", "separator", "minitems", "maxitems", "count", "itemmin", "itemmax")
+	// A keySet's keys are a list of strings with their own tags
+	// (SPEC section 4.3): minKeys (default 1), maxKeys, keyMinLength and
+	// keyMaxLength.
+	ks := v.Type == tKeySet
+	minTag, maxTag, minField, maxField := "minitems", "maxitems", "minItems", "maxItems"
+	lenMinTag, lenMaxTag, lenMinField, lenMaxField := "itemminlength", "itemmaxlength", "itemMinLength", "itemMaxLength"
+	allow("encoding", "separator", "count")
+	if ks {
+		minTag, maxTag, minField, maxField = "minkeys", "maxkeys", "minKeys", "maxKeys"
+		lenMinTag, lenMaxTag, lenMinField, lenMaxField = "keyminlength", "keymaxlength", "keyMinLength", "keyMaxLength"
+		allow("minkeys", "maxkeys")
+	} else {
+		allow("minitems", "maxitems", "itemmin", "itemmax")
+	}
 	v.Occurs = e.Occurs
 	if v.Occurs > 1000 {
 		fail("a loader reads at most 1000 items; OCCURS %d is too many", v.Occurs)
 	}
-	o["items"] = v.Items
+	if !ks {
+		o["items"] = v.Items
+	}
 	v.Encoding = "csv"
 	if s, ok := single("encoding"); ok {
 		v.Encoding = s
@@ -895,26 +964,32 @@ func (b *builder) list(e *copybook.Entry, d doc, v *Var, o map[string]any, singl
 	if e.OccursLo >= 0 {
 		minItems = e.OccursLo
 	}
-	if s, ok := single("maxitems"); ok {
+	if ks && minItems < 1 {
+		minItems = 1
+	}
+	if s, ok := single(maxTag); ok {
 		n, err := strconv.Atoi(s)
 		if err != nil || n < 0 || n > v.Occurs {
-			fail("@max-items must be a number up to OCCURS %d", v.Occurs)
+			fail("@%s must be a number up to OCCURS %d", tagName(maxTag), v.Occurs)
 		} else {
 			maxItems = n
 		}
 	}
-	if s, ok := single("minitems"); ok {
+	if s, ok := single(minTag); ok {
 		n, err := strconv.Atoi(s)
-		if err != nil || n < 0 || n > maxItems {
-			fail("@min-items must be a number up to the table size")
-		} else {
+		switch {
+		case err != nil || n < 0 || n > maxItems:
+			fail("@%s must be a number up to the most %s, %d", tagName(minTag), map[bool]string{true: "keys", false: "items"}[ks], maxItems)
+		case ks && n < 1:
+			fail("@min-keys must be at least 1: a keySet always holds a key")
+		default:
 			minItems = n
 		}
 	}
 	if minItems > 0 {
-		o["minItems"] = int64(minItems)
+		o[minField] = int64(minItems)
 	}
-	o["maxItems"] = int64(maxItems)
+	o[maxField] = int64(maxItems)
 	v.MinItems = minItems
 	if maxItems < v.Occurs {
 		v.MaxItems = maxItems
@@ -928,30 +1003,40 @@ func (b *builder) list(e *copybook.Entry, d doc, v *Var, o map[string]any, singl
 	if v.Items == tString {
 		// Each item goes into one PIC X(n) entry: itemMaxLength defaults to
 		// n, which counts bytes while itemMaxLength counts characters.
-		allow("itemminlength", "itemmaxlength")
+		allow(lenMinTag, lenMaxTag)
 		hi := v.Pic.Size
-		if s, ok := single("itemmaxlength"); ok {
+		if s, ok := single(lenMaxTag); ok {
 			n, err := strconv.Atoi(s)
 			switch {
-			case err != nil || n < 0:
-				fail("@item-max-length must be a non-negative integer")
+			case err != nil || n < 0 || (ks && n < 1):
+				fail("@%s must be a positive integer", tagName(lenMaxTag))
 			case n > v.Pic.Size:
-				fail("@item-max-length %d is more than PIC %s holds", n, e.Pic)
+				fail("@%s %d is more than PIC %s holds", tagName(lenMaxTag), n, e.Pic)
 			default:
 				hi = n
+				if n < v.Pic.Size {
+					v.ItemMaxLen = &n
+				}
 			}
 		}
-		o["itemMaxLength"] = int64(hi)
-		if s, ok := single("itemminlength"); ok {
+		o[lenMaxField] = int64(hi)
+		if s, ok := single(lenMinTag); ok {
 			n, err := strconv.Atoi(s)
 			switch {
 			case err != nil || n < 0:
-				fail("@item-min-length must be a non-negative integer")
+				fail("@%s must be a non-negative integer", tagName(lenMinTag))
 			case n > hi:
-				fail("@item-min-length %d is above the item maximum length %d", n, hi)
+				fail("@%s %d is above the %s maximum length %d", tagName(lenMinTag), n, map[bool]string{true: "key", false: "item"}[ks], hi)
 			default:
-				o["itemMinLength"] = int64(n)
+				o[lenMinField] = int64(n)
+				v.ItemMinLen = &n
 			}
+		}
+		if ks && (v.ItemMinLen == nil || *v.ItemMinLen < 1) {
+			// An empty key is out of range whatever the bounds: a stray
+			// separator must not become a key anyone can match.
+			one := 1
+			v.ItemMinLen = &one
 		}
 	}
 	// The number of items goes in the DEPENDING ON item, or in @count.
@@ -1126,7 +1211,7 @@ func (b *builder) defaultValue(v *Var, e *copybook.Entry) (any, error) {
 			return nil, fmt.Errorf("%s is finer than PIC %s of %s holds", s, e.Pic, v.Unit)
 		}
 		return formatDuration(int64(d)), nil
-	case tList:
+	case tList, tKeySet:
 		if len(v.Default) > v.Occurs {
 			return nil, fmt.Errorf("has %d items; OCCURS %d holds fewer", len(v.Default), v.Occurs)
 		}
@@ -1171,7 +1256,7 @@ func valueDefault(e *copybook.Entry, v *Var) ([]string, bool, error) {
 	if len(e.Values) > 1 || lit.Thru != nil {
 		return nil, false, fmt.Errorf("VALUE takes one literal on a configuration field")
 	}
-	if v.Type == tList {
+	if v.isList() {
 		return nil, false, fmt.Errorf("VALUE %s on an OCCURS table sets every item; give the list's default with @default <item>...", lit.Text)
 	}
 	text := lit.Text
@@ -1200,7 +1285,7 @@ func valueDefault(e *copybook.Entry, v *Var) ([]string, bool, error) {
 }
 
 var knownFileTags = []string{"file", "type", "desc", "details", "required", "secret", "path", "pathenv", "reload",
-	"maxsize", "group", "deprecated", "format", "schema", "dnsnames", "keyalgorithms", "minremaining",
+	"maxsize", "group", "deprecated", "replacedby", "format", "schema", "dnsnames", "keyalgorithms", "minremaining",
 	"requireca", "mincertificates", "passwordvar", "pattern", "minlength", "maxlength"}
 
 var fileTypeTags = map[string][]string{
@@ -1309,8 +1394,8 @@ func (b *builder) file(e *copybook.Entry, d doc, group string) {
 	if group != "" {
 		o["group"] = group
 	}
-	if s, ok := single("deprecated"); ok {
-		o["deprecated"] = map[string]any{"message": s}
+	if dep := b.deprecated(e, d, d.has("required"), "file input"); dep != nil {
+		o["deprecated"] = dep
 	}
 	switch f.Type {
 	case "config":
@@ -1492,4 +1577,59 @@ func toAny(ss []string) []any {
 		out[i] = s
 	}
 	return out
+}
+
+// tagName is a normalised tag as the README writes it: @key-min-length.
+func tagName(norm string) string {
+	return map[string]string{
+		"minitems": "min-items", "maxitems": "max-items", "minkeys": "min-keys", "maxkeys": "max-keys",
+		"itemminlength": "item-min-length", "itemmaxlength": "item-max-length",
+		"keyminlength": "key-min-length", "keymaxlength": "key-max-length",
+	}[norm]
+}
+
+// maxDeprecation is the most characters a deprecation message may have
+// (SPEC section 4.2).
+const maxDeprecation = 500
+
+// deprecated reads @deprecated "<message>" and @replaced-by <NAME> into
+// the contract's deprecated object, or nil when the input is not
+// deprecated. The message says what to use instead, or why the input is
+// going away: not blank, and at most 500 characters. A required input
+// cannot be deprecated, since the platform could not stop setting it.
+func (b *builder) deprecated(e *copybook.Entry, d doc, required bool, what string) map[string]any {
+	dt, ok := d.get("deprecated")
+	rt, hasRB := d.get("replacedby")
+	if !ok {
+		if hasRB {
+			b.p.add(rt.line, "%s: %s needs @deprecated", e.Name, rt.as)
+		}
+		return nil
+	}
+	if len(dt.values) != 1 {
+		b.p.add(dt.line, "%s: %s takes one value, the message in quotes: @deprecated \"Use PORT instead\"", e.Name, dt.as)
+		return nil
+	}
+	msg := dt.values[0]
+	switch {
+	case strings.TrimSpace(msg) == "":
+		b.p.add(dt.line, "%s: %s must say what to use instead, or why the %s is going away", e.Name, dt.as, what)
+	case utf8.RuneCountInString(msg) > maxDeprecation:
+		b.p.add(dt.line, "%s: %s has %d characters; a deprecation message has at most %d", e.Name, dt.as, utf8.RuneCountInString(msg), maxDeprecation)
+	}
+	if required {
+		b.p.add(dt.line, "%s: a @required %s cannot be @deprecated: deprecating it asks the platform to stop setting it", e.Name, what)
+	}
+	dep := map[string]any{"message": msg}
+	if hasRB {
+		switch {
+		case len(rt.values) != 1:
+			b.p.add(rt.line, "%s: %s takes one name", e.Name, rt.as)
+		case what == "variable" && !envNameRe.MatchString(rt.values[0]):
+			b.p.add(rt.line, "%s: %s %s is not a variable name ([A-Z][A-Z0-9_]*)", e.Name, rt.as, rt.values[0])
+		default:
+			dep["replacedBy"] = rt.values[0]
+		}
+	}
+	return dep
 }

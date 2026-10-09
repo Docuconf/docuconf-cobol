@@ -52,8 +52,11 @@
                  TO WS-BODY-LEN
            END-IF
            CALL "EVP_sha256" RETURNING WS-SHA256 END-CALL
-      *> Check every key, so the time taken does not say which one
-      *> matched; with no keys configured, nothing is accepted.
+      *> WEBHOOK_KEYS is a keySet: CFG-WEBHOOK-KEYS holds its keys in
+      *> the order the platform gave them, CFG-WEBHOOK-KEY-COUNT how
+      *> many. Try every key, without stopping at the first match, so
+      *> the time taken does not say which one matched; with no keys
+      *> configured, nothing is accepted.
            PERFORM VARYING WS-K FROM 1 BY 1
                    UNTIL WS-K > CFG-WEBHOOK-KEY-COUNT
                PERFORM CHECK-KEY
@@ -69,11 +72,11 @@
            STOP RUN.
 
       *> The hex HMAC-SHA256 of the body under key WS-K, compared in
-      *> constant time with the signature.
-      *> A key shorter than the contract's 32 characters is skipped:
-      *> docuconf exec stops the job before it gets here, but the loader
-      *> alone does not check item lengths, and an empty key would let
-      *> anyone sign.
+      *> constant time with the signature (COBOL has no constant-time
+      *> comparison of its own, so CRYPTO_memcmp does it). A key
+      *> shorter than the contract's 32 characters cannot get here:
+      *> docuconf exec and the loader both stop the job at boot. It is
+      *> skipped anyway, since an empty key would let anyone sign.
        CHECK-KEY.
            MOVE FUNCTION LENGTH(FUNCTION TRIM(
                CFG-WEBHOOK-KEYS(WS-K) TRAILING)) TO WS-KEY-LEN

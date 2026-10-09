@@ -15,6 +15,15 @@ contract.#Contract & {
 		}
 	}
 	vars: {
+		API_KEYS: {
+			type:         "keySet"
+			description:  "API keys that callers present, as a JSON array"
+			secret:       true
+			encoding:     "json"
+			minKeys:      1
+			maxKeys:      3
+			keyMaxLength: 64
+		}
 		API_TOKEN: {
 			type:        "string"
 			description: "API token for the upstream"
@@ -42,6 +51,16 @@ contract.#Contract & {
 			description: "Offset applied to every sequence number"
 			min:         -999999999
 			max:         999999999
+		}
+		OLD_PORT: {
+			type:        "int"
+			description: "Port the gateway used to listen on"
+			deprecated: {
+				message:    "Use PORT instead"
+				replacedBy: "PORT"
+			}
+			min: 0
+			max: 99999
 		}
 		PARTNER_KEYSTORE_PASSWORD: {
 			type:        "string"
@@ -152,6 +171,17 @@ contract.#Contract & {
 		VERBOSE: {
 			type:        "bool"
 			description: "Log every request"
+		}
+		WEBHOOK_KEYS: {
+			type:         "keySet"
+			description:  "Keys that verify webhook signatures"
+			secret:       true
+			encoding:     "csv"
+			separator:    ","
+			minKeys:      1
+			maxKeys:      2
+			keyMinLength: 32
+			keyMaxLength: 256
 		}
 	}
 	files: {

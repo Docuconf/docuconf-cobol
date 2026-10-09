@@ -148,7 +148,7 @@ func editDistance(a, b string) int {
 }
 
 // recordTags are the tags of the level-01 record.
-var recordTags = []string{"service", "program", "package", "prefix"}
+var recordTags = []string{"service", "program", "package", "prefix", "appversion"}
 
 // allTags lists every tag, by normalised name.
 var allTags = slices.Concat(recordTags, knownVarTags, knownFileTags, []string{"ignore"})

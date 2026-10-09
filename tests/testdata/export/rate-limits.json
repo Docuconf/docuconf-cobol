@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["perMinute"],
+  "additionalProperties": false,
+  "properties": {
+    "perMinute": {"type": "integer", "minimum": 1},
+    "burst": {"type": "integer", "minimum": 0}
+  }
+}
