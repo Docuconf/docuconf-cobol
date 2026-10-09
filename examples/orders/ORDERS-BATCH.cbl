@@ -41,7 +41,8 @@
            MOVE 0 TO RETURN-CODE
            STOP RUN.
 
-      *> The typed configuration. DATABASE_URL is a secret: never shown.
+      *> The typed configuration. DATABASE_URL and WEBHOOK_KEYS are
+      *> secrets: never shown.
        SHOW-CONFIG.
            DISPLAY "orders-batch configuration:" END-DISPLAY
            MOVE CFG-PORT TO WS-SHOW-NUM
@@ -61,6 +62,7 @@
            MOVE CFG-WORKER-COUNT TO WS-SHOW-NUM
            DISPLAY "  WORKER_COUNT    " FUNCTION TRIM(WS-SHOW-NUM)
                END-DISPLAY
+           DISPLAY "  WEBHOOK_KEYS    ***" END-DISPLAY
            DISPLAY "  orders file     " FUNCTION TRIM(CFG-ORDERS-PATH)
                END-DISPLAY.
 

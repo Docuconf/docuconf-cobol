@@ -33,6 +33,23 @@
       *> - plus one for the summary step.
       *> @min 1  @max 64  @default 4
            05  CFG-WORKER-COUNT        PIC 9(2).
+      *> Keys that verify the signature on incoming payment webhooks
+      *>
+      *> A webhook is accepted when it is signed with any key in the
+      *> list, so the key can be rotated without turning webhooks
+      *> away. To rotate:
+      *>
+      *>  1. add the new key as the second item, and roll out;
+      *>  2. switch the sender to the new key;
+      *>  3. remove the old key, and roll out.
+      *>
+      *> Each key is 32 to 256 characters, so an empty or truncated
+      *> key fails at boot. Without this variable, the service
+      *> rejects every webhook.
+      *> @secret  @min-items 1  @item-min-length 32
+      *> @count CFG-WEBHOOK-KEY-COUNT
+           05  CFG-WEBHOOK-KEYS        PIC X(256) OCCURS 2 TIMES.
+           05  CFG-WEBHOOK-KEY-COUNT   PIC 9.
       *> The orders to summarise, one per line
       *> @file orders text  @path /data/orders.txt
       *> @path-env ORDERS_FILE  @required  @max-size 1Mi
