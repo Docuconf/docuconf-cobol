@@ -13,6 +13,7 @@ package tests
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,25 +32,58 @@ import (
 	"time"
 
 	docuconf "github.com/docuconf/docuconf-go"
+	toml "github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 
 	"github.com/docuconf/docuconf-cobol/internal/gen"
 )
 
+type fileContent struct {
+	Text   *string `json:"text"`
+	Base64 *string `json:"base64"`
+}
+
 type confCase struct {
-	ID       string            `json:"id"`
-	Requires []string          `json:"requires"`
-	Contract json.RawMessage   `json:"contract"`
-	Env      map[string]string `json:"env"`
-	Expect   map[string]any    `json:"expect"`
+	ID       string                 `json:"id"`
+	Requires []string               `json:"requires"`
+	Contract json.RawMessage        `json:"contract"`
+	Env      map[string]string      `json:"env"`
+	Files    map[string]fileContent `json:"files"`
+	Expect   map[string]any         `json:"expect"`
 	Errors   []struct {
 		Var  string `json:"var"`
 		Code string `json:"code"`
 	} `json:"errors"`
 }
 
-// unsupported lists the cases the COBOL loader cannot represent, with
-// the reason. It is empty: every case runs.
-var unsupported = map[string]string{}
+// supportedTags are the capability tags (SPEC section 12) this SDK
+// supports: all of them. It is an allow-list, so a case with a tag the
+// runner does not know is skipped, never run, and a skip fails the suite
+// under DOCUCONF_REQUIRE_CONFORMANCE=1.
+var supportedTags = map[string]bool{
+	"int64": true, "json-schema": true, "key-set": true, "deprecated": true,
+	"strict-parsing": true, "files": true, "profiles": true, "overlays": true,
+}
+
+func unsupportedTag(c confCase) string {
+	for _, tag := range c.Requires {
+		if !supportedTags[tag] {
+			return tag
+		}
+	}
+	return ""
+}
+
+// execOnlyTags are the tags whose cases the loader alone cannot run:
+// file contents, certificates and keystores, profiles and overlays are
+// checked by docuconf exec, which runs every one of them in the first
+// pass. The loader only puts a file's path in its field, and a COBOL
+// program reads its configuration from the environment.
+var execOnlyTags = map[string]string{
+	"files":    "file inputs",
+	"profiles": "profiles",
+	"overlays": "overlays",
+}
 
 // String fields are this wide; values are compared without the
 // trailing spaces a COBOL field pads them with.
@@ -104,12 +139,44 @@ func loadCases(t *testing.T) []confCase {
 	return doc.Cases
 }
 
+// caseEnv writes the case's files under a new, empty directory and
+// returns the case's environment with DOCUCONF_FILE_ROOT set to it, the
+// whole environment the case runs with (SPEC section 12).
+func caseEnv(t *testing.T, c confCase) (map[string]string, string) {
+	t.Helper()
+	root := t.TempDir()
+	for p, fc := range c.Files {
+		var data []byte
+		switch {
+		case fc.Text != nil:
+			data = []byte(*fc.Text)
+		case fc.Base64 != nil:
+			b, err := base64.StdEncoding.DecodeString(*fc.Base64)
+			if err != nil {
+				t.Fatalf("%s: %v", p, err)
+			}
+			data = b
+		}
+		full := filepath.Join(root, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := map[string]string{"DOCUCONF_FILE_ROOT": root}
+	for k, v := range c.Env {
+		env[k] = v
+	}
+	return env, root
+}
+
 func TestConformance(t *testing.T) {
 	cobc, dc := tools(t)
 	cases := loadCases(t)
 	built := map[string]*driver{}
-	var expectN, errorN, skipped int
-	for _, c := range cases {
+	driverFor := func(c confCase) *driver {
 		key := string(c.Contract)
 		if built[key] == nil {
 			d, err := buildDriver(t, cobc, c.Contract)
@@ -118,13 +185,29 @@ func TestConformance(t *testing.T) {
 			}
 			built[key] = d
 		}
-		d := built[key]
+		return built[key]
+	}
+	var run []confCase
+	skipped := map[string]int{}
+	for _, c := range cases {
+		if tag := unsupportedTag(c); tag != "" {
+			skipped[tag]++
+			t.Run(c.ID, func(t *testing.T) { t.Skipf("requires %s, which this runner does not support", tag) })
+			continue
+		}
+		run = append(run, c)
+	}
+
+	// Pass 1: every case under docuconf exec, which checks the
+	// environment, the files, profiles and overlays against the case's
+	// contract, then starts a program that CALLs the generated loader.
+	var expectN, errorN int
+	for _, c := range run {
+		d := driverFor(c)
 		t.Run(c.ID, func(t *testing.T) {
-			if why, skip := unsupported[c.ID]; skip {
-				skipped++
-				t.Skip(why)
-			}
-			stdout, stderr, code := d.run(t, dc, c.Env)
+			env, root := caseEnv(t, c)
+			stdout, stderr, code := d.run(t, dc, env)
+			checkSecrets(t, d, c.Env, stderr)
 			if len(c.Errors) > 0 {
 				errorN++
 				if code != 1 {
@@ -133,11 +216,7 @@ func TestConformance(t *testing.T) {
 				if strings.Contains(stdout, "DRIVER") {
 					t.Fatalf("the program ran despite the problems")
 				}
-				for _, e := range c.Errors {
-					if !hasViolation(stderr, e.Var, e.Code) {
-						t.Errorf("want %s (%s) in:\n%s", e.Var, e.Code, stderr)
-					}
-				}
+				checkViolations(t, c, stderr)
 				return
 			}
 			expectN++
@@ -149,28 +228,45 @@ func TestConformance(t *testing.T) {
 				t.Fatalf("%v\nstdout:\n%q", err, stdout)
 			}
 			for name, want := range c.Expect {
+				if cf := d.files[name]; cf != nil {
+					if err := compareFile(cf, got[name], want, root, env); err != nil {
+						t.Errorf("file input %s: %v", name, err)
+					}
+					continue
+				}
+				// docuconf exec validates the profile and overlay layers,
+				// but passes the program only the environment and the
+				// contract's defaults (SPEC: profiles and overlays do not
+				// apply to a COBOL program). A variable the environment
+				// does not set must hold its contract default.
+				if d.layered && !d.isSet(name, c.Env) {
+					want = d.vars[name].def
+				}
 				if err := compare(d.vars[name], got[name], want); err != nil {
 					t.Errorf("%s: %v", name, err)
 				}
 			}
 		})
 	}
-	t.Logf("conformance: %d cases (%d with typed values checked in the COBOL record, %d rejected by docuconf exec before the program starts), %d skipped",
-		len(cases), expectN, errorN, skipped)
+	t.Logf("docuconf exec: %d cases (%d with typed values checked in the COBOL record, %d rejected by docuconf exec before the program starts)",
+		len(run), expectN, errorN)
 
-	// The same cases without docuconf exec: the generated loader alone
-	// must load the same values and report the same problems, except
-	// for the rules COBOL leaves to docuconf exec (loaderExecOnly).
-	var loaderValues, loaderErrors, loaderExec int
-	for _, c := range cases {
-		d := built[string(c.Contract)]
+	// Pass 2: the same cases without docuconf exec, so only the
+	// generated COBOL loader checks the environment. It must load the
+	// same values and report the same problems, except for what COBOL
+	// leaves to docuconf exec, which pass 1 covered.
+	var loaderValues, loaderErrors int
+	covered := map[string]int{}
+	for _, c := range run {
+		d := driverFor(c)
 		t.Run("loader/"+c.ID, func(t *testing.T) {
 			if why := loaderExecOnlyReason(c); why != "" {
-				loaderExec++
-				t.Logf("left to docuconf exec: %s", why)
+				covered[why]++
 				return
 			}
-			stdout, stderr, code := d.runLoader(t, c.Env)
+			env, _ := caseEnv(t, c)
+			stdout, stderr, code := d.runLoader(t, env)
+			checkSecrets(t, d, c.Env, stderr)
 			if len(c.Errors) > 0 {
 				loaderErrors++
 				if code != 3 {
@@ -179,21 +275,7 @@ func TestConformance(t *testing.T) {
 				if strings.Contains(stdout, "DRIVER") {
 					t.Fatalf("the program ran despite the problems")
 				}
-				for _, e := range c.Errors {
-					if !hasViolation(stderr, e.Var, e.Code) {
-						t.Errorf("want %s (%s) from the loader in:\n%s", e.Var, e.Code, stderr)
-					}
-				}
-				for name, cv := range d.vars {
-					if !cv.secret {
-						continue
-					}
-					for k, val := range c.Env {
-						if val != "" && (k == name || strings.HasPrefix(k, name+"__")) && strings.Contains(stderr, val) {
-							t.Errorf("the loader printed the value of secret %s", name)
-						}
-					}
-				}
+				checkViolations(t, c, stderr)
 				return
 			}
 			loaderValues++
@@ -209,45 +291,113 @@ func TestConformance(t *testing.T) {
 					t.Errorf("%s: %v", name, err)
 				}
 			}
+			checkDeprecationWarnings(t, d, c.Env, stderr)
 		})
 	}
-	t.Logf("loader alone: %d cases with values, %d rejected by the loader, %d left to docuconf exec (%s)",
-		loaderValues, loaderErrors, loaderExec, strings.Join(slices.Sorted(maps.Values(loaderExecOnly)), "; "))
-	if loaderValues+loaderErrors+loaderExec != len(cases) {
-		t.Errorf("the loader pass covered %d of %d cases", loaderValues+loaderErrors+loaderExec, len(cases))
+	var cov []string
+	coveredN := 0
+	for _, why := range slices.Sorted(maps.Keys(covered)) {
+		cov = append(cov, fmt.Sprintf("%d %s", covered[why], why))
+		coveredN += covered[why]
+	}
+	t.Logf("loader alone: %d cases with values, %d rejected by the loader, %d covered by docuconf exec in pass 1 (%s)",
+		loaderValues, loaderErrors, coveredN, strings.Join(cov, ", "))
+	if loaderValues+loaderErrors+coveredN != len(run) {
+		t.Errorf("the loader pass covered %d of %d cases", loaderValues+loaderErrors+coveredN, len(run))
+	}
+	n := 0
+	for _, k := range skipped {
+		n += k
+	}
+	t.Logf("conformance: %d cases, %d run, %d skipped", len(cases), len(run), n)
+	if n > 0 && require() {
+		t.Errorf("%d cases skipped for tags this runner does not support (%v); every case must run", n, skipped)
 	}
 }
 
-// loaderExecOnly lists the problem codes the COBOL loader leaves to
-// docuconf exec, with the reason. A case expecting one of them runs only
-// under docuconf exec; every other case also runs against the loader
-// alone.
-var loaderExecOnly = map[string]string{
-	"schema_mismatch": "JSON Schema validation",
-}
-
+// loaderExecOnlyReason says why a case runs only under docuconf exec,
+// or "" when the loader alone runs it too.
 func loaderExecOnlyReason(c confCase) string {
-	for _, e := range c.Errors {
-		if why, ok := loaderExecOnly[e.Code]; ok {
+	for _, tag := range c.Requires {
+		if why, ok := execOnlyTags[tag]; ok {
 			return why
+		}
+	}
+	for _, e := range c.Errors {
+		if e.Code == "schema_mismatch" {
+			return "JSON Schema validation"
 		}
 	}
 	return ""
 }
 
-func hasViolation(out, name, code string) bool {
+// violationRe matches a problem line, "  NAME: message (code)", as both
+// docuconf exec and the loader print them.
+var violationRe = regexp.MustCompile(`^  ([A-Za-z0-9][A-Za-z0-9_-]*): .*\(([a-z_]+)\)$`)
+
+// checkViolations requires exactly the case's (input, code) pairs.
+func checkViolations(t *testing.T, c confCase, out string) {
+	t.Helper()
+	got := map[string]bool{}
 	for _, l := range strings.Split(out, "\n") {
-		l = strings.TrimSpace(l)
-		if strings.HasPrefix(l, name+":") && strings.HasSuffix(l, "("+code+")") {
-			return true
+		if m := violationRe.FindStringSubmatch(l); m != nil {
+			got[m[1]+" ("+m[2]+")"] = true
 		}
 	}
-	return false
+	want := map[string]bool{}
+	for _, e := range c.Errors {
+		want[e.Var+" ("+e.Code+")"] = true
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("problems %v, want %v in:\n%s", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)), out)
+	}
+}
+
+// checkSecrets fails when error output holds a secret variable's value.
+func checkSecrets(t *testing.T, d *driver, env map[string]string, out string) {
+	t.Helper()
+	for name, cv := range d.vars {
+		if !cv.secret {
+			continue
+		}
+		for k, val := range env {
+			if val != "" && (k == name || strings.HasPrefix(k, name+"__")) && strings.Contains(out, val) {
+				t.Errorf("the output holds the value of secret %s", name)
+			}
+		}
+	}
+}
+
+// checkDeprecationWarnings requires the loader's warning for each
+// deprecated variable that is set, naming it and its message, never its
+// value (SPEC section 4.2).
+func checkDeprecationWarnings(t *testing.T, d *driver, env map[string]string, out string) {
+	t.Helper()
+	for name, cv := range d.vars {
+		if cv.deprecated == "" || !d.isSet(name, env) {
+			continue
+		}
+		if !strings.Contains(out, "docuconf: warning: "+name+" is deprecated") || !strings.Contains(out, cv.deprecated) {
+			t.Errorf("no deprecation warning for %s in:\n%s", name, out)
+		}
+		if v := env[name]; v != "" && strings.Contains(out, v) {
+			t.Errorf("the deprecation warning holds the value of %s", name)
+		}
+	}
 }
 
 type cvar struct {
-	name, typ, items, field, count, present string
-	secret                                  bool
+	name, typ, items, field, count, present, deprecated string
+	encoding                                            string
+	secret                                              bool
+	def                                                 any // the contract default, or nil
+}
+
+func isListType(typ string) bool { return typ == "list" || typ == "keySet" }
+
+// cfile is a file input: its field receives the effective path.
+type cfile struct {
+	name, typ, format, path, pathEnv, field string
 }
 
 type driver struct {
@@ -255,15 +405,44 @@ type driver struct {
 	bin      string
 	contract string
 	vars     map[string]*cvar
-	order    []string
+	files    map[string]*cfile
+	order    []string // variables, then file inputs
+	// layered is true when the contract has profiles or overlays.
+	layered bool
 }
 
-// buildDriver writes a copybook declaring the case contract's variables,
-// generates its loader, and compiles a program that CALLs it and prints
-// every field.
+// isSet reports whether env sets a variable, as docuconf exec reads it
+// (SPEC section 5): an empty value is unset for every type but string,
+// and an indexed list is set when any NAME__<n> is.
+func (d *driver) isSet(name string, env map[string]string) bool {
+	cv := d.vars[name]
+	if cv == nil {
+		return false
+	}
+	if v, ok := env[name]; ok && (v != "" || cv.typ == "string") {
+		return true
+	}
+	if isListType(cv.typ) && cv.encoding == "indexed" {
+		for k, v := range env {
+			if n, ok := strings.CutPrefix(k, name+"__"); ok && v != "" && indexRe.MatchString(n) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var indexRe = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
+
+// buildDriver writes a copybook declaring the case contract's variables
+// and file inputs, generates its loader, and compiles a program that
+// CALLs it and prints every field.
 func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error) {
 	var doc struct {
-		Vars map[string]map[string]any `json:"vars"`
+		Vars     map[string]map[string]any `json:"vars"`
+		Files    map[string]map[string]any `json:"files"`
+		Profiles any                       `json:"profiles"`
+		Overlays any                       `json:"overlays"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(contractJSON))
 	dec.UseNumber()
@@ -271,27 +450,41 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 		return nil, err
 	}
 	dir := t.TempDir()
-	d := &driver{dir: dir, vars: map[string]*cvar{}}
-	for n := range doc.Vars {
-		d.order = append(d.order, n)
-	}
-	slices.Sort(d.order)
+	d := &driver{dir: dir, vars: map[string]*cvar{}, files: map[string]*cfile{}}
+	d.layered = doc.Profiles != nil || doc.Overlays != nil
+	varNames := slices.Sorted(maps.Keys(doc.Vars))
+	fileNames := slices.Sorted(maps.Keys(doc.Files))
 
 	var cpy strings.Builder
 	cpy.WriteString("      *> @service conformance  @program CASECFG\n")
 	cpy.WriteString("       01  CASE-CONFIG.\n")
-	for i, n := range d.order {
+	if len(varNames)+len(fileNames) == 0 {
+		cpy.WriteString("           05  FILLER PIC X.\n")
+	}
+	for i, n := range varNames {
 		v := doc.Vars[n]
 		cv := &cvar{name: n, typ: v["type"].(string), field: fmt.Sprintf("F-%d", i+1),
 			present: fmt.Sprintf("P-%d", i+1), count: fmt.Sprintf("C-%d", i+1)}
 		cv.secret = v["secret"] == true
+		cv.encoding, _ = v["encoding"].(string)
+		cv.def = v["default"]
 		d.vars[n] = cv
+		d.order = append(d.order, n)
 		tags := []string{"@env " + n, "@present " + cv.present}
-		if v["required"] == true {
+		// With profiles or overlays, a required variable may come from
+		// a layer docuconf exec checks but does not pass on.
+		if v["required"] == true && !d.layered {
 			tags = append(tags, "@required")
 		}
 		if def, ok := v["default"]; ok {
 			tags = append(tags, "@default "+defaultWords(cv.typ, def))
+		}
+		if dep, ok := v["deprecated"].(map[string]any); ok {
+			cv.deprecated = dep["message"].(string)
+			tags = append(tags, "@deprecated "+quote(cv.deprecated))
+			if rb, ok := dep["replacedBy"].(string); ok {
+				tags = append(tags, "@replaced-by "+rb)
+			}
 		}
 		ctags, err := constraintTags(dir, n, v)
 		if err != nil {
@@ -321,15 +514,20 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 			tags = append(tags, "@type bool")
 		case "duration":
 			pic = "PIC S9(18)"
-			tags = append(tags, "@unit ns", "@encoding "+v["encoding"].(string))
-		case "list":
-			cv.items = v["items"].(string)
+			tags = append(tags, "@unit ns", "@encoding "+cv.encoding)
+		case "list", "keySet":
+			cv.items = "string"
+			if cv.typ == "list" {
+				cv.items = v["items"].(string)
+			} else {
+				tags = append(tags, "@type keySet")
+			}
 			if cv.items == "int" {
 				pic = "PIC S9(19) OCCURS 20"
 			} else {
 				pic = fmt.Sprintf("PIC X(%d) OCCURS 20", strWidth)
 			}
-			tags = append(tags, "@count "+cv.count, "@encoding "+v["encoding"].(string))
+			tags = append(tags, "@count "+cv.count, "@encoding "+cv.encoding)
 			if s, ok := v["separator"].(string); ok {
 				tags = append(tags, "@separator "+quote(s))
 			}
@@ -342,9 +540,27 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 		}
 		fmt.Fprintf(&cpy, "           05  %s %s.\n", cv.field, pic)
 		fmt.Fprintf(&cpy, "           05  %s PIC X.\n", cv.present)
-		if cv.typ == "list" {
+		if isListType(cv.typ) {
 			fmt.Fprintf(&cpy, "           05  %s PIC 9(4).\n", cv.count)
 		}
+	}
+	for i, n := range fileNames {
+		f := doc.Files[n]
+		cf := &cfile{name: n, typ: f["type"].(string), field: fmt.Sprintf("FI-%d", i+1)}
+		cf.path, _ = f["path"].(string)
+		cf.pathEnv, _ = f["pathEnv"].(string)
+		cf.format, _ = f["format"].(string)
+		d.files[n] = cf
+		d.order = append(d.order, n)
+		tags, err := fileTags(dir, cf, f, d.layered)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(&cpy, "      *> %s\n", strings.ReplaceAll(f["description"].(string), "\n", " "))
+		for _, tg := range tags {
+			fmt.Fprintf(&cpy, "      *> %s\n", tg)
+		}
+		fmt.Fprintf(&cpy, "           05  %s PIC X(%d).\n", cf.field, strWidth)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "case.cpy"), []byte(cpy.String()), 0o644); err != nil {
 		return nil, err
@@ -353,8 +569,11 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 	if err != nil {
 		return nil, fmt.Errorf("generate:\n%v\ncopybook:\n%s", err, cpy.String())
 	}
+	if len(c.Warnings) > 0 {
+		return nil, fmt.Errorf("generate warned:\n%s\ncopybook:\n%s", strings.Join(c.Warnings, "\n"), cpy.String())
+	}
 	if _, err := c.ContractCUE(); err != nil {
-		return nil, fmt.Errorf("the generated contract: %v", err)
+		return nil, fmt.Errorf("the generated contract: %v\ncopybook:\n%s", err, cpy.String())
 	}
 	loader, err := c.Loader()
 	if err != nil {
@@ -390,8 +609,12 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
            DISPLAY "DRIVER" END-DISPLAY
 `)
 	for _, n := range d.order {
+		if cf := d.files[n]; cf != nil {
+			fmt.Fprintf(&prog, "           DISPLAY \"FY\" %s END-DISPLAY\n", cf.field)
+			continue
+		}
 		cv := d.vars[n]
-		if cv.typ == "list" {
+		if isListType(cv.typ) {
 			fmt.Fprintf(&prog, "           DISPLAY \"L\" %s %s END-DISPLAY\n", cv.present, cv.count)
 			fmt.Fprintf(&prog, "           PERFORM VARYING D-K FROM 1 BY 1 UNTIL D-K > %s\n", cv.count)
 			prog.WriteString(display(cv.items, cv.field+"(D-K)", `"I"`))
@@ -413,6 +636,66 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 	return d, nil
 }
 
+// fileTags are the copybook tags that declare a case's file input.
+func fileTags(dir string, cf *cfile, f map[string]any, layered bool) ([]string, error) {
+	tags := []string{fmt.Sprintf("@file %s %s", cf.name, cf.typ), "@path " + cf.path}
+	if cf.pathEnv != "" {
+		tags = append(tags, "@path-env "+cf.pathEnv)
+	}
+	if f["required"] == true {
+		tags = append(tags, "@required")
+	}
+	if f["secret"] == true && cf.typ != "tls" && cf.typ != "keystore" {
+		tags = append(tags, "@secret")
+	}
+	words := func(k string) []string {
+		var w []string
+		if xs, ok := f[k].([]any); ok {
+			for _, x := range xs {
+				w = append(w, quote(fmt.Sprint(x)))
+			}
+		}
+		return w
+	}
+	for _, k := range []struct{ field, tag string }{{"maxSize", "@max-size"}, {"minRemaining", "@min-remaining"},
+		{"minCertificates", "@min-certificates"}, {"passwordVar", "@password-var"}, {"minLength", "@min-length"},
+		{"maxLength", "@max-length"}} {
+		if x, ok := f[k.field]; ok {
+			if k.field == "minCertificates" && fmt.Sprint(x) == "1" {
+				continue // the default
+			}
+			tags = append(tags, k.tag+" "+fmt.Sprint(x))
+		}
+	}
+	if cf.typ == "config" || cf.typ == "keystore" {
+		tags = append(tags, "@format "+cf.format)
+	}
+	if p, ok := f["pattern"].(string); ok {
+		tags = append(tags, "@pattern "+quote(p))
+	}
+	if w := words("dnsNames"); len(w) > 0 {
+		tags = append(tags, "@dns-names "+strings.Join(w, " "))
+	}
+	if w := words("keyAlgorithms"); len(w) > 0 {
+		tags = append(tags, "@key-algorithms "+strings.Join(w, " "))
+	}
+	if f["requireCA"] == true {
+		tags = append(tags, "@require-ca")
+	}
+	if sc, ok := f["schema"]; ok {
+		b, err := json.Marshal(sc)
+		if err != nil {
+			return nil, err
+		}
+		name := cf.name + ".schema.json"
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+			return nil, err
+		}
+		tags = append(tags, "@schema "+name)
+	}
+	return tags, nil
+}
+
 // constraintTags are the copybook tags for a case variable's rules, so
 // the generated loader checks them too, as it does for an app.
 func constraintTags(dir, name string, v map[string]any) ([]string, error) {
@@ -422,7 +705,7 @@ func constraintTags(dir, name string, v map[string]any) ([]string, error) {
 			tags = append(tags, tag+" "+fmt.Sprint(x))
 		}
 	}
-	if v["secret"] == true {
+	if v["secret"] == true && v["type"] != "keySet" {
 		tags = append(tags, "@secret")
 	}
 	switch v["type"] {
@@ -460,6 +743,11 @@ func constraintTags(dir, name string, v map[string]any) ([]string, error) {
 	case "duration":
 		num("min", "@min")
 		num("max", "@max")
+	case "keySet":
+		num("minKeys", "@min-keys")
+		num("maxKeys", "@max-keys")
+		num("keyMinLength", "@key-min-length")
+		num("keyMaxLength", "@key-max-length")
 	case "list":
 		num("minItems", "@min-items")
 		num("maxItems", "@max-items")
@@ -496,6 +784,71 @@ func defaultWords(typ string, def any) string {
 		return quote(string(b))
 	}
 	return quote(fmt.Sprint(def))
+}
+
+// compareFile checks a file input's field: the loader stored the path
+// docuconf exec checked, DOCUCONF_FILE_ROOT in front, and the file there
+// is the case's (absent for null; its data for a config file, its text
+// for a text file).
+func compareFile(cf *cfile, got value, want any, root string, env map[string]string) error {
+	wantPath := root + cf.path
+	switch v := env[cf.pathEnv]; {
+	case cf.pathEnv != "" && v != "":
+		wantPath = root + v
+	case cf.pathEnv != "":
+		// docuconf exec sets an unset pathEnv to the path it checked,
+		// filepath.Join(root, path), which the loader keeps.
+		wantPath = filepath.Join(root, cf.path)
+	}
+	gotPath := strings.TrimRight(got.text, " ")
+	if gotPath != wantPath {
+		return fmt.Errorf("path %q, want %q", gotPath, wantPath)
+	}
+	if want == nil {
+		if _, err := os.Stat(gotPath); err == nil {
+			return fmt.Errorf("want absent, but %s exists", gotPath)
+		}
+		return nil
+	}
+	data, err := os.ReadFile(gotPath)
+	if cf.typ == "tls" {
+		_, err = os.Stat(filepath.Join(gotPath, "tls.crt"))
+	}
+	if err != nil {
+		return err
+	}
+	switch cf.typ {
+	case "text":
+		if string(data) != want.(string) {
+			return fmt.Errorf("text %q, want %q", data, want)
+		}
+	case "config":
+		var g any
+		switch cf.format {
+		case "toml":
+			err = toml.Unmarshal(data, &g)
+		default: // json is YAML
+			err = yaml.Unmarshal(data, &g)
+		}
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(normJSON(g), normJSON(want)) {
+			return fmt.Errorf("data %v, want %v", g, want)
+		}
+	}
+	return nil
+}
+
+// normJSON is v after a JSON round trip, so numbers compare by value.
+func normJSON(v any) any {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err.Error()
+	}
+	var out any
+	_ = json.Unmarshal(b, &out)
+	return out
 }
 
 // runLoader starts the driver without docuconf exec, so only the COBOL
@@ -586,7 +939,16 @@ func (d *driver) parse(out string) (map[string]value, error) {
 			return nil, err
 		}
 		v := value{present: head[1] == 'Y'}
-		if cv.typ == "list" {
+		if d.files[n] != nil {
+			s, err := readFixed(strWidth)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %v", n, err)
+			}
+			v.text = s
+			got[n] = v
+			continue
+		}
+		if isListType(cv.typ) {
 			cnt, err := readFixed(4)
 			if err != nil {
 				return nil, err
@@ -627,7 +989,7 @@ func compare(cv *cvar, got value, want any) error {
 	if !got.present {
 		return fmt.Errorf("unset, want %v", want)
 	}
-	if cv.typ == "list" {
+	if isListType(cv.typ) {
 		wl := want.([]any)
 		if len(wl) != len(got.items) {
 			return fmt.Errorf("got %d items %q, want %v", len(got.items), got.items, want)
@@ -682,4 +1044,15 @@ func compareScalar(typ, got string, want any) error {
 		}
 	}
 	return nil
+}
+
+// hasViolation reports whether out holds the problem line for name and
+// code.
+func hasViolation(out, name, code string) bool {
+	for _, l := range strings.Split(out, "\n") {
+		if m := violationRe.FindStringSubmatch(l); m != nil && m[1] == name && m[2] == code {
+			return true
+		}
+	}
+	return false
 }

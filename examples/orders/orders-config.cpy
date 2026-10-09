@@ -36,17 +36,11 @@
       *> Keys that verify the signature on incoming payment webhooks
       *>
       *> A webhook is accepted when it is signed with any key in the
-      *> list, so the key can be rotated without turning webhooks
-      *> away. To rotate:
-      *>
-      *>  1. add the new key as the second item, and roll out;
-      *>  2. switch the sender to the new key;
-      *>  3. remove the old key, and roll out.
-      *>
-      *> Each key is 32 to 256 characters, so an empty or truncated
-      *> key fails at boot. Without this variable, the service
-      *> rejects every webhook.
-      *> @secret  @min-items 1  @item-min-length 32
+      *> set, so the key can be rotated without turning webhooks
+      *> away. Each key is 32 to 256 characters, so an empty or
+      *> truncated key fails at boot. Without this variable, the
+      *> service rejects every webhook.
+      *> @type keySet  @key-min-length 32
       *> @count CFG-WEBHOOK-KEY-COUNT
            05  CFG-WEBHOOK-KEYS        PIC X(256) OCCURS 2 TIMES.
            05  CFG-WEBHOOK-KEY-COUNT   PIC 9.

@@ -122,6 +122,21 @@ echo "$out" | grep -q "WEBHOOK_KEYS: .*(out_of_range)" || fail "out_of_range not
 echo "$out" | grep -q "webhook-key" && fail "a webhook key was printed"
 echo "$out" | grep -q "orders-batch configuration" && fail "the job ran"
 
+# The loader alone stops the job on the same empty key: a key set's
+# empty key is out of range whatever its bounds.
+echo "== empty webhook key, no docuconf exec"
+if out=$(env -i PATH="$PATH" \
+	DATABASE_URL=postgres://orders:s3cret@db:5432/orders \
+	WEBHOOK_KEYS="$old_key," ORDERS_FILE="$here/orders.txt" \
+	DOCUCONF_TERMINATION_LOG=- \
+	"$work/orders-batch" 2>&1); then
+	echo "$out"
+	fail "the job started with an empty webhook key"
+fi
+echo "$out"
+echo "$out" | grep -q "^  WEBHOOK_KEYS: has an empty key (out_of_range)$" || fail "the loader did not report the empty key"
+echo "$out" | grep -q "webhook-key" && fail "a webhook key was printed"
+
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 	echo "== docker"
 	image=docuconf-cobol-orders:smoke

@@ -31,15 +31,20 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# Build and test against the checkout, not the pinned pseudo-version:
+# docuconf-cobol, and the docuconf CLI, whose own go.mod pins the SDK by
+# version and may lag behind the checkout.
+(cd "$work" && go work init "$repo" "$DOCUCONF_GO_DIR" "$DOCUCONF_GO_DIR/cmd/docuconf")
+export GOWORK="$work/go.work"
+
 # The docuconf CLI (docuconf exec) from the same checkout.
 (cd "$DOCUCONF_GO_DIR/cmd/docuconf" && go build -o "$work/bin/docuconf" .)
 export DOCUCONF="$work/bin/docuconf"
 
-# Build and test against the checkout, not the pinned pseudo-version.
-(cd "$work" && go work init "$repo" "$DOCUCONF_GO_DIR")
-export GOWORK="$work/go.work"
-
 cd "$repo"
 go build ./...
 go test -count=1 ./internal/gen -run '^TestCueVet$' -v
-go test -count=1 ./tests -run '^TestConformance$'
+# -v for the runner's counts (cases run, covered by each pass, skipped),
+# without the per-case lines.
+go test -count=1 -v ./tests -run '^(TestConformance|TestExportFixture)$' 2>&1 \
+  | grep -Ev '^ *(=== RUN|--- PASS|=== PAUSE|=== CONT)'

@@ -85,6 +85,17 @@
       *> GeoIP database
       *> @file geoip binary  @path /var/lib/geoip/GeoLite2.mmdb
                10  GW-GEOIP-PATH       PIC X(100).
+      *> Keys that verify webhook signatures
+      *> @type keySet  @key-min-length 32  @count GW-WEBHOOK-KEY-COUNT
+           05  GW-WEBHOOK-KEYS         PIC X(256) OCCURS 2.
+           05  GW-WEBHOOK-KEY-COUNT    PIC 9.
+      *> API keys that callers present, as a JSON array
+      *> @type keySet  @encoding json  @max-keys 3  @count GW-API-KEY-N
+           05  GW-API-KEYS             PIC X(64) OCCURS 4.
+           05  GW-API-KEY-N            PIC 9.
+      *> Port the gateway used to listen on
+      *> @deprecated "Use PORT instead"  @replaced-by PORT
+           05  GW-OLD-PORT             PIC 9(5).
       *> Keystore password
       *> @secret @required
            05  GW-PARTNER-KEYSTORE-PASSWORD PIC X(64).
