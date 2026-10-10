@@ -13,7 +13,7 @@ You need Go 1.25 or later and GnuCOBOL 3 (`apt-get install gnucobol3`). Until th
 go install github.com/docuconf/docuconf-cobol/cmd/docuconf-cobol@latest
 # docuconf exec is not in a docuconf-go release yet. This is the commit
 # this SDK is tested against (go.mod pins the same one):
-go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261009180543-233f7407e2e4
+go install github.com/docuconf/docuconf-go/cmd/docuconf@v0.0.0-20261009003206-59de905a895c
 ```
 
 Once docuconf-go tags a release that includes `docuconf exec`, use that version instead of the commit. At this commit the CLI's own module (`cmd/docuconf`) still requires an earlier docuconf-go SDK, so `go install` builds a `docuconf exec` that does not know the `keySet` type yet. Until docuconf-go bumps it, build the CLI in a Go workspace of a docuconf-go checkout at the pinned commit (`go work init . ./cmd/docuconf`, then `go build` in `cmd/docuconf`), as CI and the [example's Dockerfile](examples/orders/Dockerfile) do.

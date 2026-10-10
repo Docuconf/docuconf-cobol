@@ -3,7 +3,7 @@ module github.com/docuconf/docuconf-cobol
 go 1.24.0
 
 require (
-	github.com/docuconf/docuconf-go v0.0.0-20261009180543-233f7407e2e4
+	github.com/docuconf/docuconf-go v0.0.0-20261009003206-59de905a895c
 	github.com/pelletier/go-toml/v2 v2.3.1
 	gopkg.in/yaml.v3 v3.0.1
 )
