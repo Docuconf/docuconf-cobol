@@ -4,6 +4,29 @@ All notable changes to docuconf-cobol are documented here. Entries after 0.1.0 a
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit messages; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## [0.2.0](https://github.com/Docuconf/docuconf-cobol/compare/v0.1.0...v0.2.0) (2026-10-10)
+
+
+### Features
+
+* beta suite (keySet, deprecated rules, strict parsing, files, profiles, overlays) ([3eaeb1a](https://github.com/Docuconf/docuconf-cobol/commit/3eaeb1ab44400c82a7532ea49d06bd00555a3c09))
+* beta suite (keySet, deprecated rules, strict parsing, files, profiles, overlays) ([e1b4770](https://github.com/Docuconf/docuconf-cobol/commit/e1b477096e129e1379801eb11c6c1d3936a51ae4))
+* devX fixes (columns 73-80, @min/[@max](https://github.com/max) at boot, VALUE defaults, copybook forms, tested README) ([72b08d1](https://github.com/Docuconf/docuconf-cobol/commit/72b08d114b109cf7c7ee946ab1c37445557fc790))
+* **examples:** dual-key webhook key set with rotation ([992e51b](https://github.com/Docuconf/docuconf-cobol/commit/992e51bf2452cfc36c3494231e740ad03d667b0a))
+* **examples:** dual-key webhook key set with rotation ([92fedee](https://github.com/Docuconf/docuconf-cobol/commit/92fedee5eabd37853a16f646ec16e033a7e1d3e0))
+* export description and details from doc comments ([6f42b38](https://github.com/Docuconf/docuconf-cobol/commit/6f42b38b0f461eb80f4ffafff10fc3ca2820eef9))
+* export description and details from doc comments ([bd5c373](https://github.com/Docuconf/docuconf-cobol/commit/bd5c373a07f66b9c82035f6d5c1134ac79a57c61))
+* full conformance (no skipped capability tags) ([d8289ff](https://github.com/Docuconf/docuconf-cobol/commit/d8289ffeca7d1ff775b72b3958265364bed879d3))
+* maxLength on url/json and item length limits on string lists ([974dd74](https://github.com/Docuconf/docuconf-cobol/commit/974dd7418b8584c955ac49fbed8330705f068855))
+* maxLength on url/json and item length limits on string lists ([958f50e](https://github.com/Docuconf/docuconf-cobol/commit/958f50ee8e7bd5a4d00c7ac28b10cb99813c20d2))
+* the COBOL loader enforces every variable rule itself ([2f29c80](https://github.com/Docuconf/docuconf-cobol/commit/2f29c806d41a3de0d27ad62c8349a7e3a563e20d))
+
+
+### Bug Fixes
+
+* pin docuconf-go caca804, whose CLI is built with keySet ([92c9ec2](https://github.com/Docuconf/docuconf-cobol/commit/92c9ec283f10bb745a74a216049527f0f06d57f0))
+* pin docuconf-go caca804, whose CLI is built with keySet ([b5a00ba](https://github.com/Docuconf/docuconf-cobol/commit/b5a00ba3ee5afa6c9cda617a8198980a39786783))
+
 ## 0.1.0
 
 First version of the COBOL SDK, implementing spec `v1alpha1`.
