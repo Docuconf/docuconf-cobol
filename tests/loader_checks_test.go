@@ -209,3 +209,24 @@ func TestLoaderLengthsAndSecrets(t *testing.T) {
 		}
 	}
 }
+
+// TestLoaderEmptyKey checks the message SPEC section 4.3 words exactly:
+// "key N is empty", N the key's 1-based position as received.
+func TestLoaderEmptyKey(t *testing.T) {
+	bin := checksProgram(t, `      *> Webhook keys
+      *> @env KEYS  @type keySet  @count E-KEY-N  @key-min-length 3
+           05  E-KEYS PIC X(16) OCCURS 3.
+           05  E-KEY-N PIC 9.
+`)
+	for in, want := range map[string]string{
+		"old,":     "  KEYS: key 2 is empty (out_of_range)",
+		",new":     "  KEYS: key 1 is empty (out_of_range)",
+		"abc,,def": "  KEYS: key 2 is empty (out_of_range)",
+	} {
+		out := problems(t, bin, map[string]string{"KEYS": in})
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		if !strings.Contains(out, want+"\n") || len(lines) != 2 {
+			t.Errorf("KEYS=%q: want only %q\n%s", in, want, out)
+		}
+	}
+}

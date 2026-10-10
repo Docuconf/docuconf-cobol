@@ -621,9 +621,17 @@ func valueChecks(e *emitter, ind int, v *Var, typ string) int {
 		e.line(ind, "PERFORM DC-COUNT-CHARS")
 		if v.Type == tKeySet {
 			// An empty key, a stray separator, is out of range whatever
-			// keyMinLength says.
+			// keyMinLength says. SPEC section 4.3 words its message
+			// exactly, naming the key by its 1-based position as
+			// received: "key 2 is empty" for "old,".
 			e.line(ind, "IF DC-CHARS = 0")
-			e.problem(ind+1, "has an empty key", "out_of_range")
+			e.line(ind+1, "MOVE DC-K TO DC-IDX-ED")
+			e.line(ind+1, "MOVE SPACES TO DC-MSG")
+			e.line(ind+1, `STRING "key " FUNCTION TRIM(DC-IDX-ED) " is empty"`)
+			e.line(ind+2, "DELIMITED BY SIZE INTO DC-MSG")
+			e.line(ind+1, "END-STRING")
+			e.line(ind+1, `MOVE "out_of_range" TO DC-CODE`)
+			e.line(ind+1, "PERFORM DC-PROBLEM")
 			ends++
 			if *lo > 1 || hi != nil {
 				e.line(ind, "ELSE")

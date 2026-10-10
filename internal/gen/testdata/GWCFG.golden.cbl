@@ -926,7 +926,11 @@
            ELSE
            PERFORM DC-COUNT-CHARS
            IF DC-CHARS = 0
-               MOVE "has an empty key" TO DC-MSG
+               MOVE DC-K TO DC-IDX-ED
+               MOVE SPACES TO DC-MSG
+               STRING "key " FUNCTION TRIM(DC-IDX-ED) " is empty"
+                   DELIMITED BY SIZE INTO DC-MSG
+               END-STRING
                MOVE "out_of_range" TO DC-CODE
                PERFORM DC-PROBLEM
            ELSE
@@ -1009,7 +1013,11 @@
            ELSE
            PERFORM DC-COUNT-CHARS
            IF DC-CHARS = 0
-               MOVE "has an empty key" TO DC-MSG
+               MOVE DC-K TO DC-IDX-ED
+               MOVE SPACES TO DC-MSG
+               STRING "key " FUNCTION TRIM(DC-IDX-ED) " is empty"
+                   DELIMITED BY SIZE INTO DC-MSG
+               END-STRING
                MOVE "out_of_range" TO DC-CODE
                PERFORM DC-PROBLEM
            ELSE
