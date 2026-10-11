@@ -2,6 +2,8 @@
 
 The COBOL SDK for [docuconf](https://github.com/docuconf/docuconf-go): typed configuration contracts between an app and the Kubernetes platform that runs it. You declare your configuration once, as an annotated copybook. `docuconf-cobol generate` turns it into a CUE contract for the platform and a loader program your code CALLs, and `docuconf exec` checks the real environment and files against the contract when the container starts.
 
+Documentation: [docuconf.dev](https://docuconf.dev) · [COBOL guide](https://docuconf.dev/languages/cobol/)
+
 - Example: [`examples/orders`](examples/orders), a CronJob-style batch program, with a step-by-step walkthrough
 - Licence: MIT
 
