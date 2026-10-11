@@ -154,7 +154,7 @@ A `keySet` (SPEC section 4.3) is a set of secret keys that are all valid at once
            05  CFG-WEBHOOK-KEY-COUNT   PIC 9.
 ```
 
-It is always secret (`@secret` is implied; no default, no examples), and travels like a list of strings, in `@encoding csv` (with `@separator`), `json` or `indexed`. `@min-keys` defaults to 1, `@max-keys` to the `OCCURS` size and `@key-max-length` to the PIC size; `@key-min-length` has no default, but an empty key (a stray separator) is `out_of_range` whatever the bounds. Too few or too many keys is `too_few_items` or `too_many_items`, a key outside its lengths `out_of_range`, and no problem shows a key. The loader stores the keys in the order the platform gave them, and the count.
+It is always secret (`@secret` is implied; no default, no examples), and travels like a list of strings, in `@encoding csv` (with `@separator`), `json` or `indexed`. `@min-keys` defaults to 1, `@max-keys` to the `OCCURS` size and `@key-max-length` to the PIC size; `@key-min-length` has no default, but an empty key (a stray separator) is `out_of_range` whatever the bounds, reported as `key N is empty` with `N` its 1-based position (`old,` has an empty key 2). Too few or too many keys is `too_few_items` or `too_many_items`, a key outside its lengths `out_of_range`, and no problem shows a key. The loader stores the keys in the order the platform gave them, and the count.
 
 There is no verify helper in COBOL, and no constant-time comparison: compare a candidate with every key, up to the count, without stopping at the first match, and use a constant-time comparison from a library where one exists. [`PAYHOOK.cbl`](examples/orders/PAYHOOK.cbl) checks a webhook's HMAC-SHA256 against each key with OpenSSL's libcrypto, `CRYPTO_memcmp` included:
 

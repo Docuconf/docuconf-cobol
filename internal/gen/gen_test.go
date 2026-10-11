@@ -251,6 +251,8 @@ func TestProblems(t *testing.T) {
 			"1500ms is not a whole number of s"},
 		{"file without path", "      *> Orders to read\n      *> @file orders\n           05  CFG-ORDERS PIC X(100).\n",
 			"a file input needs @path"},
+		{"reload watch", "      *> Orders to read\n      *> @file orders  @path /data/orders.txt  @reload watch\n           05  CFG-ORDERS PIC X(100).\n",
+			"CFG-ORDERS: @reload watch needs the program to reload the file itself; a COBOL loader reads paths once, so use restart"},
 		{"item lengths on ints", "      *> Shards to own\n      *> @item-max-length 3  @count CFG-N\n           05  CFG-SHARDS PIC 9(4) OCCURS 4.\n           05  CFG-N PIC 9.\n",
 			"@item-max-length does not apply to a list variable"},
 		{"item max length beyond PIC", "      *> Branch codes\n      *> @item-max-length 5  @count CFG-N\n           05  CFG-BRANCHES PIC X(4) OCCURS 4.\n           05  CFG-N PIC 9.\n",

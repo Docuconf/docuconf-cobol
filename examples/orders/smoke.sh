@@ -134,7 +134,7 @@ if out=$(env -i PATH="$PATH" \
 	fail "the job started with an empty webhook key"
 fi
 echo "$out"
-echo "$out" | grep -q "^  WEBHOOK_KEYS: has an empty key (out_of_range)$" || fail "the loader did not report the empty key"
+echo "$out" | grep -q "^  WEBHOOK_KEYS: key 2 is empty (out_of_range)$" || fail "the loader did not report the empty key"
 echo "$out" | grep -q "webhook-key" && fail "a webhook key was printed"
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
