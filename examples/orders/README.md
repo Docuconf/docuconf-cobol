@@ -168,7 +168,7 @@ DATABASE_URL=postgres://orders:s3cret@db:5432/orders ORDERS_FILE=orders.txt \
 
 ```text
 docuconf: 1 configuration problem:
-  WEBHOOK_KEYS: key 1 is empty (out_of_range)
+  WEBHOOK_KEYS: key 2 is empty (out_of_range)
 ```
 
 The loader alone stops the job too: it rejects an empty key whatever the bounds, a key outside 32 to 256 characters and a third key. COBOL has no constant-time comparison, so PAYHOOK compares with OpenSSL's `CRYPTO_memcmp`, tries every key without stopping at the first match, and skips a key shorter than 32 characters as a last line of defence. In a values file, the key set is a `secretKeyRef`:
