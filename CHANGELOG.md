@@ -4,6 +4,21 @@ All notable changes to docuconf-cobol are documented here. Entries after 0.1.0 a
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit messages; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## [0.3.0](https://github.com/Docuconf/docuconf-cobol/compare/v0.2.0...v0.3.0) (2026-10-13)
+
+
+### Features
+
+* one empty-key message; test the reload: watch rejection ([7a493c5](https://github.com/Docuconf/docuconf-cobol/commit/7a493c5e196201034bed7a15884d1c010bae2b75))
+
+
+### Documentation
+
+* **examples:** CONFIG docs name the docuconf-cobol 0.2.0 that exported the contract ([056654b](https://github.com/Docuconf/docuconf-cobol/commit/056654b3958422f254826507756a66e9e19eeb9f))
+* **examples:** exec output for docuconf-go v0.2.0 names the empty key 1-based ([b67583f](https://github.com/Docuconf/docuconf-cobol/commit/b67583fc5a88a1e5a626f6357b582f1adbd64987))
+* **examples:** generated CONFIG docs, and link docuconf.dev ([bcf49fd](https://github.com/Docuconf/docuconf-cobol/commit/bcf49fd85cb9a19692ed9f92f84865ebda34be11))
+* **examples:** regenerate CONFIG docs with docuconf-go v0.2.0 ([0d26bbc](https://github.com/Docuconf/docuconf-cobol/commit/0d26bbcc4634bb5e8d209510c8a91b91b83c9a54))
+
 ## [0.2.0](https://github.com/Docuconf/docuconf-cobol/compare/v0.1.0...v0.2.0) (2026-10-10)
 
 
