@@ -4,7 +4,7 @@ All notable changes to docuconf-cobol are documented here. Entries after 0.1.0 a
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit messages; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## [0.2.0](https://github.com/Docuconf/docuconf-cobol/compare/v0.1.0...v0.2.0) (2026-10-10)
+## [0.2.0](https://github.com/Docuconf/docuconf-cobol/compare/v0.1.0...v0.2.1-0.20261106135157-13384dbc0ea5) (2026-10-10)
 
 
 ### Features
