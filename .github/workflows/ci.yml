@@ -90,6 +90,14 @@ jobs:
           mkdir "$mod/orders"
           cp examples/orders/contract.cue "$mod/orders/"
           cd "$mod" && cue vet -c ./orders
+      # examples/shop is contract-first: its contract.json is written by
+      # hand, so it is vetted as data against #Contract.
+      - name: cue vet -c the shop contract
+        run: |
+          mod="$(mktemp -d)"
+          cp -r docuconf-go/spec/cue/cue.mod docuconf-go/spec/cue/contract "$mod/"
+          cp examples/shop/contract.json "$mod/"
+          cd "$mod" && cue vet -c ./contract contract.json -d '#Contract'
       # CONFIG.md, CONFIG.agents.md and docs.json are generated from the
       # committed contract.cue. "Generated files are up to date" regenerates
       # it in place, so restore it first: a release's
@@ -101,6 +109,12 @@ jobs:
           docuconf docs contract.cue --check CONFIG.md
           docuconf docs contract.cue --format agents --check CONFIG.agents.md
           docuconf docs contract.cue --format model --check docs.json
+      - name: Shop generated docs are up to date
+        working-directory: examples/shop
+        run: |
+          docuconf docs contract.json --check CONFIG.md
+          docuconf docs contract.json --format agents --check CONFIG.agents.md
+          docuconf docs contract.json --format model --check docs.json
       - name: Example smoke test
         env:
           DOCUCONF: ${{ runner.temp }}/bin/docuconf
@@ -109,3 +123,9 @@ jobs:
         env:
           DOCUCONF: ${{ runner.temp }}/bin/docuconf
         run: examples/orders/test-config.sh
+      # The matrix runs in go test (tests/shop_test.go); this runs the
+      # real process for three of its cases.
+      - name: Shop example smoke test
+        env:
+          DOCUCONF: ${{ runner.temp }}/bin/docuconf
+        run: examples/shop/smoke.sh

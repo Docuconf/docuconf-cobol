@@ -62,7 +62,7 @@ func readFile(t *testing.T, p string) string {
 }
 
 // TestREADMESnippets checks every code block of the README and of the
-// example's walkthrough: COBOL and Dockerfile blocks are pieces of the
+// examples' walkthroughs: COBOL and Dockerfile blocks are pieces of the
 // example's files, which CI compiles and runs; shell blocks are run in a
 // copy of the example and their output compared with the text block
 // after them, or are pieces of scripts CI runs; install commands pin
@@ -79,16 +79,22 @@ func TestREADMESnippets(t *testing.T) {
 	}
 	pathEnv := bin + string(os.PathListSeparator) + os.Getenv("PATH")
 
-	example := "../examples/orders"
+	orders, shop := "../examples/orders", "../examples/shop"
 	sources := map[string][]string{
-		"cobol":      {example + "/orders-config.cpy", example + "/ORDERS-BATCH.cbl", example + "/CFGTEST.cbl", example + "/PAYHOOK.cbl"},
-		"dockerfile": {example + "/Dockerfile"},
+		"cobol":      {orders + "/orders-config.cpy", orders + "/ORDERS-BATCH.cbl", orders + "/CFGTEST.cbl", orders + "/PAYHOOK.cbl", shop + "/SHOP.cbl"},
+		"dockerfile": {orders + "/Dockerfile"},
 	}
-	scripts := readFile(t, example+"/smoke.sh") + readFile(t, example+"/test-config.sh")
+	scripts := readFile(t, orders+"/smoke.sh") + readFile(t, orders+"/test-config.sh") + readFile(t, shop+"/smoke.sh")
 	ci := readFile(t, "../.github/workflows/ci.yml")
 	pin := regexp.MustCompile(`github.com/docuconf/docuconf-go (v\S+)`).FindStringSubmatch(readFile(t, "../go.mod"))[1]
 
-	for _, readme := range []string{"../README.md", example + "/README.md"} {
+	// Each README with the example its shell blocks run in.
+	for _, r := range []struct{ readme, example string }{
+		{"../README.md", orders},
+		{orders + "/README.md", orders},
+		{shop + "/README.md", shop},
+	} {
+		readme, example := r.readme, r.example
 		blocks := readBlocks(t, readme)
 		// Shell blocks run in sequence in one copy of the example.
 		work := t.TempDir()
