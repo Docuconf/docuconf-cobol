@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Runs the shared conformance suite (docuconf-go conformance/cases.json,
-# through generated loaders and `docuconf exec`) and the test that `cue vet`s
-# generated contracts against the meta-schema (docuconf-go spec/cue). Not the
-# full suite. Used by this repo's CI and by docuconf-go's downstream gate.
+# Runs the shared conformance suite (docuconf-go conformance/cases.json
+# and cases.pending.json, through generated loaders and `docuconf exec`)
+# and the test that `cue vet`s generated contracts against the meta-schema
+# (docuconf-go spec/cue). Not the full suite. Used by this repo's CI and by
+# docuconf-go's downstream gate.
 #
 #   DOCUCONF_GO_DIR=/path/to/docuconf-go scripts/conformance.sh
 #
@@ -46,5 +47,5 @@ go build ./...
 go test -count=1 ./internal/gen -run '^TestCueVet$' -v
 # -v for the runner's counts (cases run, covered by each pass, skipped),
 # without the per-case lines.
-go test -count=1 -v ./tests -run '^(TestConformance|TestExportFixture)$' 2>&1 \
+go test -count=1 -v ./tests -run '^(TestConformance|TestConformancePending|TestExportFixture)$' 2>&1 \
   | grep -Ev '^ *(=== RUN|--- PASS|=== PAUSE|=== CONT)'

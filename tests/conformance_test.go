@@ -7,7 +7,8 @@
 // It needs cobc (GnuCOBOL 3) and the docuconf CLI (DOCUCONF, else
 // docuconf on PATH), and reads cases.json from DOCUCONF_CONFORMANCE,
 // else ../../docuconf-go/conformance/cases.json. Without them it skips,
-// unless DOCUCONF_REQUIRE_CONFORMANCE=1.
+// unless DOCUCONF_REQUIRE_CONFORMANCE=1. TestConformancePending runs
+// cases.pending.json, next to cases.json, the same way.
 package tests
 
 import (
@@ -57,12 +58,14 @@ type confCase struct {
 }
 
 // supportedTags are the capability tags (SPEC section 12) this SDK
-// supports: all of them. It is an allow-list, so a case with a tag the
-// runner does not know is skipped, never run, and a skip fails the suite
-// under DOCUCONF_REQUIRE_CONFORMANCE=1.
+// supports. It is an allow-list, so a case with a tag the runner does
+// not know is skipped, never run. In cases.json a skip fails the suite
+// under DOCUCONF_REQUIRE_CONFORMANCE=1; in cases.pending.json it never
+// does.
 var supportedTags = map[string]bool{
 	"int64": true, "json-schema": true, "key-set": true, "deprecated": true,
 	"strict-parsing": true, "files": true, "profiles": true, "overlays": true,
+	"required-if": true, "roles": true,
 }
 
 func unsupportedTag(c confCase) string {
@@ -75,14 +78,18 @@ func unsupportedTag(c confCase) string {
 }
 
 // execOnlyTags are the tags whose cases the loader alone cannot run:
-// file contents, certificates and keystores, profiles and overlays are
-// checked by docuconf exec, which runs every one of them in the first
-// pass. The loader only puts a file's path in its field, and a COBOL
-// program reads its configuration from the environment.
+// file contents, certificates and keystores, profiles and overlays,
+// requiredIf conditions and roles are checked by docuconf exec, which
+// runs every one of them in the first pass. The loader only puts a
+// file's path in its field, a COBOL program reads its configuration
+// from the environment, and the copybook has no tags for conditions or
+// roles.
 var execOnlyTags = map[string]string{
-	"files":    "file inputs",
-	"profiles": "profiles",
-	"overlays": "overlays",
+	"files":       "file inputs",
+	"profiles":    "profiles",
+	"overlays":    "overlays",
+	"required-if": "requiredIf conditions",
+	"roles":       "roles",
 }
 
 // String fields are this wide; values are compared without the
@@ -118,16 +125,44 @@ func tools(t *testing.T) (cobc, dc string) {
 	return cobc, dc
 }
 
+// casesPath is cases.json: DOCUCONF_CONFORMANCE, else the one in a
+// docuconf-go checkout next to this repository.
+func casesPath() string {
+	if p := os.Getenv("DOCUCONF_CONFORMANCE"); p != "" {
+		return p
+	}
+	return filepath.Join("..", "..", "docuconf-go", "conformance", "cases.json")
+}
+
 func loadCases(t *testing.T) []confCase {
 	t.Helper()
-	p := os.Getenv("DOCUCONF_CONFORMANCE")
-	if p == "" {
-		p = filepath.Join("..", "..", "docuconf-go", "conformance", "cases.json")
-	}
+	p := casesPath()
 	data, err := os.ReadFile(p)
 	if err != nil {
 		skipOrFail(t, "conformance cases not found at %s: %v", p, err)
 	}
+	return decodeCases(t, data)
+}
+
+// loadPendingCases reads cases.pending.json next to cases.json: the
+// cases for spec features not every SDK has yet. Without the file the
+// whole pending run is skipped, even under
+// DOCUCONF_REQUIRE_CONFORMANCE=1.
+func loadPendingCases(t *testing.T) []confCase {
+	t.Helper()
+	p := filepath.Join(filepath.Dir(casesPath()), "cases.pending.json")
+	data, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skipf("no pending conformance cases at %s", p)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decodeCases(t, data)
+}
+
+func decodeCases(t *testing.T, data []byte) []confCase {
+	t.Helper()
 	var doc struct {
 		Cases []confCase `json:"cases"`
 	}
@@ -174,7 +209,20 @@ func caseEnv(t *testing.T, c confCase) (map[string]string, string) {
 
 func TestConformance(t *testing.T) {
 	cobc, dc := tools(t)
-	cases := loadCases(t)
+	runConformance(t, cobc, dc, loadCases(t), require())
+}
+
+// TestConformancePending runs cases.pending.json as TestConformance
+// runs cases.json: a case whose tags the runner supports must pass, and
+// a case with a tag it does not know is skipped without failing.
+func TestConformancePending(t *testing.T) {
+	cobc, dc := tools(t)
+	runConformance(t, cobc, dc, loadPendingCases(t), false)
+}
+
+// runConformance runs cases in both passes. With failOnSkip, a case
+// skipped for an unknown tag fails the suite.
+func runConformance(t *testing.T, cobc, dc string, cases []confCase, failOnSkip bool) {
 	built := map[string]*driver{}
 	driverFor := func(c confCase) *driver {
 		key := string(c.Contract)
@@ -310,7 +358,7 @@ func TestConformance(t *testing.T) {
 		n += k
 	}
 	t.Logf("conformance: %d cases, %d run, %d skipped", len(cases), len(run), n)
-	if n > 0 && require() {
+	if n > 0 && failOnSkip {
 		t.Errorf("%d cases skipped for tags this runner does not support (%v); every case must run", n, skipped)
 	}
 }
@@ -472,8 +520,10 @@ func buildDriver(t *testing.T, cobc string, contractJSON []byte) (*driver, error
 		d.order = append(d.order, n)
 		tags := []string{"@env " + n, "@present " + cv.present}
 		// With profiles or overlays, a required variable may come from
-		// a layer docuconf exec checks but does not pass on.
-		if v["required"] == true && !d.layered {
+		// a layer docuconf exec checks but does not pass on, and a
+		// variable with roles is optional outside them, which only
+		// docuconf exec knows.
+		if v["required"] == true && !d.layered && v["roles"] == nil {
 			tags = append(tags, "@required")
 		}
 		if def, ok := v["default"]; ok {
@@ -642,7 +692,7 @@ func fileTags(dir string, cf *cfile, f map[string]any, layered bool) ([]string, 
 	if cf.pathEnv != "" {
 		tags = append(tags, "@path-env "+cf.pathEnv)
 	}
-	if f["required"] == true {
+	if f["required"] == true && f["roles"] == nil {
 		tags = append(tags, "@required")
 	}
 	if f["secret"] == true && cf.typ != "tls" && cf.typ != "keystore" {
