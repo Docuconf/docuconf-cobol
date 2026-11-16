@@ -3,3 +3,4 @@
 *.so
 *.o
 examples/orders/orders-batch
+examples/shop/shop

@@ -4,7 +4,7 @@ The COBOL SDK for [docuconf](https://github.com/docuconf/docuconf-go): typed con
 
 Documentation: [docuconf.dev](https://docuconf.dev) · [COBOL guide](https://docuconf.dev/languages/cobol/)
 
-- Example: [`examples/orders`](examples/orders), a CronJob-style batch program, with a step-by-step walkthrough
+- Examples: [`examples/orders`](examples/orders), a CronJob-style batch program, with a step-by-step walkthrough; [`examples/shop`](examples/shop), one program run as a `web` and a `worker` role, with a `requiredIf` condition and the `otel@1` fragment, all checked by `docuconf exec` against a contract written by hand
 - Licence: MIT
 
 ## 1. Install
@@ -316,7 +316,7 @@ DOCUCONF_CONFORMANCE=../docuconf-go/conformance/cases.json \
 DOCUCONF_REQUIRE_CONFORMANCE=1 go test ./...
 ```
 
-Without them the suite skips, unless `DOCUCONF_REQUIRE_CONFORMANCE=1`. `DOCUCONF_SPEC` points the contract tests at docuconf-go's `spec/cue` for `cue vet -c`. `go test ./tests` also checks that every code block in this README and the example's walkthrough is a piece of a file CI builds or runs.
+Without them the suite skips, unless `DOCUCONF_REQUIRE_CONFORMANCE=1`. `DOCUCONF_SPEC` points the contract tests at docuconf-go's `spec/cue` for `cue vet -c`. `go test ./tests` also checks that every code block in this README and the examples' walkthroughs is a piece of a file CI builds or runs, and runs the shop example's matrix.
 
 ### Development
 
