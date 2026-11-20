@@ -4,6 +4,31 @@ All notable changes to docuconf-cobol are documented here. Entries after 0.1.0 a
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit messages; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## [0.3.0](https://github.com/Docuconf/docuconf-cobol/compare/v0.2.0...v0.3.0) (2026-11-20)
+
+
+### Features
+
+* one empty-key message; test the reload: watch rejection ([7a493c5](https://github.com/Docuconf/docuconf-cobol/commit/7a493c5e196201034bed7a15884d1c010bae2b75))
+* run requiredIf and roles conformance cases through docuconf exec ([48e8c71](https://github.com/Docuconf/docuconf-cobol/commit/48e8c71186c31ef991f3e8368fb6a6a9b9f5c26e))
+* run requiredIf and roles conformance cases through docuconf exec ([f11c645](https://github.com/Docuconf/docuconf-cobol/commit/f11c645cc7e7f256f32e06c9e7d83bcdb985c8c3))
+
+
+### Bug Fixes
+
+* **ci:** read pseudo-versions made after a docuconf-go release ([63684f4](https://github.com/Docuconf/docuconf-cobol/commit/63684f4d70af32b8080c0ce58cf00f743875a116))
+* **ci:** read pseudo-versions made after a docuconf-go release ([25dd668](https://github.com/Docuconf/docuconf-cobol/commit/25dd668e615dd28cf9ee61008acd1097631a98f0))
+
+
+### Documentation
+
+* add the shop example (roles, requiredIf, fragments) ([8402e82](https://github.com/Docuconf/docuconf-cobol/commit/8402e8252944a8a00644da0ff415ef13133fad77))
+* add the shop example (roles, requiredIf, fragments) ([a8384a4](https://github.com/Docuconf/docuconf-cobol/commit/a8384a4f46a34562a774068f37bc32286ff3adfe))
+* **examples:** CONFIG docs name the docuconf-cobol 0.2.0 that exported the contract ([056654b](https://github.com/Docuconf/docuconf-cobol/commit/056654b3958422f254826507756a66e9e19eeb9f))
+* **examples:** exec output for docuconf-go v0.2.0 names the empty key 1-based ([b67583f](https://github.com/Docuconf/docuconf-cobol/commit/b67583fc5a88a1e5a626f6357b582f1adbd64987))
+* **examples:** generated CONFIG docs, and link docuconf.dev ([bcf49fd](https://github.com/Docuconf/docuconf-cobol/commit/bcf49fd85cb9a19692ed9f92f84865ebda34be11))
+* **examples:** regenerate CONFIG docs with docuconf-go v0.2.0 ([0d26bbc](https://github.com/Docuconf/docuconf-cobol/commit/0d26bbcc4634bb5e8d209510c8a91b91b83c9a54))
+
 ## [0.2.0](https://github.com/Docuconf/docuconf-cobol/compare/v0.1.0...v0.2.0) (2026-10-10)
 
 
