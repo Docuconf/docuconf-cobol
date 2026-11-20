@@ -8,7 +8,7 @@
 # with the SDK from the same commit; when a release exists, copy its
 # binary instead and drop this stage.
 FROM golang:1.25 AS docuconf
-ARG DOCUCONF_VERSION=v0.2.1-0.20261116124746-546bada1c79e
+ARG DOCUCONF_VERSION=v0.2.1-0.20261118123204-cd4db8ece2ab
 RUN git clone -q https://github.com/docuconf/docuconf-go /docuconf-go \
  && cd /docuconf-go \
  && git checkout -q "${DOCUCONF_VERSION##*-}" \
